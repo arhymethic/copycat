@@ -582,17 +582,22 @@ def synthesize_hybrid_line(text: str,
                            letter_spacing: float = 1.0,
                            space_mult: float = 1.0) -> Tuple[List[Stroke], float]:
     """
-    Synthesizes a line containing mathematical symbols, operators, equations, or
-    punctuation while preserving authentic neural RNN handwriting for all words
-    and characters. Procedural punctuation (:, ., ;) and math operators (=, +, *, /, ^, _)
-    are rendered with inline procedural single-stroke glyphs.
+    Synthesizes a line containing words, spaces, mathematical operators, and punctuation.
+    Each word is synthesized as an intact, unbroken neural RNN trajectory with natural
+    internal character kerning. Spaces between words scale cleanly with space_mult
+    without ever breaking letters inside words apart.
     """
-    val_chars = (set(drawing.alphabet) - {'\x00'}) - PROC_SYMBOLS
+    val_chars = ((set(drawing.alphabet) - {'\x00', ' '}) - PROC_SYMBOLS)
 
     tokens = []
     curr_text = []
     for ch in text:
-        if ch in val_chars:
+        if ch == ' ':
+            if curr_text:
+                tokens.append(('rnn', ''.join(curr_text)))
+                curr_text = []
+            tokens.append(('space', ' '))
+        elif ch in val_chars:
             curr_text.append(ch)
         else:
             if curr_text:
@@ -605,14 +610,20 @@ def synthesize_hybrid_line(text: str,
     all_strokes: List[Stroke] = []
     curr_x = origin_x
     scale_sym = target_cap_height_mm / 14.0
-    base_space_w = 2.2 * (target_cap_height_mm / 3.8) * space_mult
+    base_space_w = 2.4 * (target_cap_height_mm / 3.8) * space_mult
 
     idx = 0
     n = len(tokens)
     while idx < n:
         kind, val = tokens[idx]
 
-        # 1. Superscript operator (e.g. ^2, ^x)
+        # 1. Whitespace gap between words
+        if kind == 'space':
+            curr_x += base_space_w
+            idx += 1
+            continue
+
+        # 2. Superscript operator (e.g. ^2, ^x)
         if kind == 'sym' and val == '^' and idx + 1 < n:
             next_kind, next_val = tokens[idx + 1]
             sup_y = baseline_y - 2.0 * (target_cap_height_mm / 3.8)
@@ -627,25 +638,22 @@ def synthesize_hybrid_line(text: str,
                 all_strokes.extend(s_strokes)
                 curr_x += adv
             else:
-                core = next_val.strip()
-                if core:
-                    raw_offsets = model_engine.get_or_sample_offsets(core, style_id=style_id, bias=bias)
-                    polys, width = model_engine._process_offsets_to_mm(
-                        raw_offsets, origin_x=curr_x, baseline_y=sup_y,
-                        target_cap_height_mm=sup_scale, letter_spacing=letter_spacing,
-                        space_mult=space_mult
+                raw_offsets = model_engine.get_or_sample_offsets(next_val, style_id=style_id, bias=bias)
+                polys, width = model_engine._process_offsets_to_mm(
+                    raw_offsets, origin_x=curr_x, baseline_y=sup_y,
+                    target_cap_height_mm=sup_scale, letter_spacing=letter_spacing
+                )
+                if slant_deg != 0.0 or jitter_mm > 0.0 or wobble > 0.0:
+                    polys = transform_strokes(
+                        polys, baseline_y=sup_y, origin_x=curr_x,
+                        slant_deg=slant_deg, scale_mult=1.0, jitter_mm=jitter_mm, wobble=wobble
                     )
-                    if slant_deg != 0.0 or jitter_mm > 0.0 or wobble > 0.0:
-                        polys = transform_strokes(
-                            polys, baseline_y=sup_y, origin_x=curr_x,
-                            slant_deg=slant_deg, scale_mult=1.0, jitter_mm=jitter_mm, wobble=wobble
-                        )
-                    all_strokes.extend(polys)
-                    curr_x += width
+                all_strokes.extend(polys)
+                curr_x += width
             idx += 2
             continue
 
-        # 2. Subscript operator (e.g. _f, _i, _1)
+        # 3. Subscript operator (e.g. _f, _i, _1)
         if kind == 'sym' and val == '_' and idx + 1 < n:
             next_kind, next_val = tokens[idx + 1]
             sub_y = baseline_y + 1.2 * (target_cap_height_mm / 3.8)
@@ -660,25 +668,22 @@ def synthesize_hybrid_line(text: str,
                 all_strokes.extend(s_strokes)
                 curr_x += adv
             else:
-                core = next_val.strip()
-                if core:
-                    raw_offsets = model_engine.get_or_sample_offsets(core, style_id=style_id, bias=bias)
-                    polys, width = model_engine._process_offsets_to_mm(
-                        raw_offsets, origin_x=curr_x, baseline_y=sub_y,
-                        target_cap_height_mm=sub_scale, letter_spacing=letter_spacing,
-                        space_mult=space_mult
+                raw_offsets = model_engine.get_or_sample_offsets(next_val, style_id=style_id, bias=bias)
+                polys, width = model_engine._process_offsets_to_mm(
+                    raw_offsets, origin_x=curr_x, baseline_y=sub_y,
+                    target_cap_height_mm=sub_scale, letter_spacing=letter_spacing
+                )
+                if slant_deg != 0.0 or jitter_mm > 0.0 or wobble > 0.0:
+                    polys = transform_strokes(
+                        polys, baseline_y=sub_y, origin_x=curr_x,
+                        slant_deg=slant_deg, scale_mult=1.0, jitter_mm=jitter_mm, wobble=wobble
                     )
-                    if slant_deg != 0.0 or jitter_mm > 0.0 or wobble > 0.0:
-                        polys = transform_strokes(
-                            polys, baseline_y=sub_y, origin_x=curr_x,
-                            slant_deg=slant_deg, scale_mult=1.0, jitter_mm=jitter_mm, wobble=wobble
-                        )
-                    all_strokes.extend(polys)
-                    curr_x += width
+                all_strokes.extend(polys)
+                curr_x += width
             idx += 2
             continue
 
-        # 3. Procedural symbol (=, +, *, /, :, ., ;, etc.)
+        # 4. Procedural symbol (=, +, *, /, :, ., ;, etc.)
         if kind == 'sym':
             s_strokes, adv = stroke_font.render_word_strokes(
                 val, curr_x, baseline_y, scale_sym,
@@ -687,28 +692,23 @@ def synthesize_hybrid_line(text: str,
             )
             all_strokes.extend(s_strokes)
             curr_x += adv
+            # Comfortable kerning padding after capital 'Q'
+            if val == 'Q':
+                curr_x += 0.4
         else:
-            # 4. Neural RNN text chunk
-            l_spaces = len(val) - len(val.lstrip(' '))
-            r_spaces = len(val) - len(val.rstrip(' '))
-            core = val.strip()
-
-            curr_x += l_spaces * base_space_w
-            if core:
-                raw_offsets = model_engine.get_or_sample_offsets(core, style_id=style_id, bias=bias)
-                polys, width = model_engine._process_offsets_to_mm(
-                    raw_offsets, origin_x=curr_x, baseline_y=baseline_y,
-                    target_cap_height_mm=target_cap_height_mm, letter_spacing=letter_spacing,
-                    space_mult=space_mult
+            # 5. Neural RNN intact word
+            raw_offsets = model_engine.get_or_sample_offsets(val, style_id=style_id, bias=bias)
+            polys, width = model_engine._process_offsets_to_mm(
+                raw_offsets, origin_x=curr_x, baseline_y=baseline_y,
+                target_cap_height_mm=target_cap_height_mm, letter_spacing=letter_spacing
+            )
+            if slant_deg != 0.0 or jitter_mm > 0.0 or wobble > 0.0:
+                polys = transform_strokes(
+                    polys, baseline_y=baseline_y, origin_x=curr_x,
+                    slant_deg=slant_deg, scale_mult=1.0, jitter_mm=jitter_mm, wobble=wobble
                 )
-                if slant_deg != 0.0 or jitter_mm > 0.0 or wobble > 0.0:
-                    polys = transform_strokes(
-                        polys, baseline_y=baseline_y, origin_x=curr_x,
-                        slant_deg=slant_deg, scale_mult=1.0, jitter_mm=jitter_mm, wobble=wobble
-                    )
-                all_strokes.extend(polys)
-                curr_x += width
-            curr_x += r_spaces * base_space_w
+            all_strokes.extend(polys)
+            curr_x += width
 
         idx += 1
 
@@ -797,7 +797,7 @@ class VasquezHandwritingEngine:
 
     def prefetch_lines(self, texts: List[str], style_id: int = 1, bias: float = 0.85):
         """Synthesizes multiple lines in parallel across CPU cores using a ThreadPoolExecutor."""
-        val_chars = (set(drawing.alphabet) - {'\x00'}) - PROC_SYMBOLS
+        val_chars = ((set(drawing.alphabet) - {'\x00', ' '}) - PROC_SYMBOLS)
         rnn_chunks: List[str] = []
         for text in texts:
             curr: List[str] = []
@@ -815,7 +815,7 @@ class VasquezHandwritingEngine:
                 if chunk:
                     rnn_chunks.append(chunk)
 
-        uncached = [t for t in rnn_chunks if not self.is_cached(t, style_id, bias)]
+        uncached = [t for t in set(rnn_chunks) if not self.is_cached(t, style_id, bias)]
         if not uncached:
             return
 
@@ -892,8 +892,7 @@ class VasquezHandwritingEngine:
                                origin_x: float,
                                baseline_y: float,
                                target_cap_height_mm: float,
-                               letter_spacing: float = 1.0,
-                               space_mult: float = 1.0) -> Tuple[List[Stroke], float]:
+                               letter_spacing: float = 1.0) -> Tuple[List[Stroke], float]:
         """
         Applies drawing.py pipeline from sjvasquez/handwriting-synthesis and maps
         coordinates to physical millimeters locked to notebook ruled baselines.
@@ -917,15 +916,6 @@ class VasquezHandwritingEngine:
 
         if len(offsets) == 0:
             return [], 0.0
-
-        # Adjust inter-word spacebar gap smoothly without chopping cursive sentences
-        if abs(space_mult - 1.0) > 0.02:
-            eos_indices = np.where(offsets[:, 2] == 1.0)[0]
-            for idx in eos_indices:
-                if idx + 1 < len(offsets):
-                    # Inter-word pen-up jump is a forward horizontal transit dx >= 9.2
-                    if offsets[idx + 1, 0] >= 9.2:
-                        offsets[idx + 1, 0] = max(4.0, offsets[idx + 1, 0] * space_mult)
 
         offsets[:, :2] *= 1.5
 
