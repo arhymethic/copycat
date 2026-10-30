@@ -344,6 +344,44 @@ class GravesNumPyModel:
         return np.array(sampled)
 
 
+def transform_strokes(strokes: List[Stroke],
+                      baseline_y: float,
+                      origin_x: float,
+                      slant_deg: float = 0.0,
+                      scale_mult: float = 1.0,
+                      jitter_mm: float = 0.0,
+                      wobble: float = 0.0) -> List[Stroke]:
+    """Applies slant shear, scale, jitter, and wobble transforms to stroke polylines in physical mm."""
+    if not strokes:
+        return []
+
+    tan_slant = math.tan(math.radians(-slant_deg)) if slant_deg != 0.0 else 0.0
+    transformed: List[Stroke] = []
+
+    for s_idx, stroke in enumerate(strokes):
+        new_stroke: Stroke = []
+        stroke_jitter_y = (np.random.normal(0.0, jitter_mm) if jitter_mm > 0.0 else 0.0)
+
+        for pt_idx, (x, y) in enumerate(stroke):
+            dy = (y - baseline_y) * scale_mult
+            dx = (x - origin_x) * scale_mult
+
+            if tan_slant != 0.0:
+                dx += dy * tan_slant
+
+            if wobble > 0.0:
+                w_dx = wobble * 0.4 * math.sin(0.8 * pt_idx + s_idx)
+                w_dy = wobble * 0.4 * math.cos(0.8 * pt_idx + s_idx)
+                dx += w_dx
+                dy += w_dy
+
+            new_stroke.append((float(origin_x + dx), float(baseline_y + dy + stroke_jitter_y)))
+
+        transformed.append(new_stroke)
+
+    return transformed
+
+
 class VasquezHandwritingEngine:
     """
     Direct bridge to sjvasquez/handwriting-synthesis.
@@ -361,6 +399,7 @@ class VasquezHandwritingEngine:
         self.has_styles = os.path.exists(self.styles_dir)
 
         self.neural_model: Optional[GravesNumPyModel] = None
+        self._raw_offsets_cache: Dict[Tuple[str, int, float], np.ndarray] = {}
         self._line_cache: Dict[Tuple[str, int, float], Tuple[List[Stroke], float]] = {}
         self._init_model()
 
@@ -400,12 +439,16 @@ class VasquezHandwritingEngine:
                         baseline_y: float,
                         style_id: int = 1,
                         bias: float = 0.85,
-                        target_cap_height_mm: float = 4.8) -> Tuple[List[Stroke], float]:
+                        target_cap_height_mm: float = 4.8,
+                        slant_deg: float = 0.0,
+                        jitter_mm: float = 0.0,
+                        wobble: float = 0.0) -> Tuple[List[Stroke], float]:
         """
         Synthesizes a line of text using the exact handwriting-synthesis logic:
-        1. Alex Graves RNN generation with style priming
+        1. Alex Graves RNN generation with style priming (cached in memory)
         2. Applies drawing.offsets_to_coords, drawing.denoise, and drawing.align
-        3. Scales coordinates to physical millimeters locked to 8.0 mm baselines.
+        3. Scales coordinates to physical millimeters locked to 8.0 mm baselines
+        4. Applies interactive fine-tuning parameters (slant, jitter, wobble).
         """
         if not self.is_rnn_ready():
             raise RuntimeError(
@@ -413,39 +456,37 @@ class VasquezHandwritingEngine:
             )
 
         cache_key = (text.strip(), style_id % 13, round(bias, 2))
-        if cache_key in self._line_cache:
-            cached_strokes, width = self._line_cache[cache_key]
-            # Offset to target position
-            offset_strokes = []
-            for stroke in cached_strokes:
-                shifted = [(origin_x + pt[0], baseline_y + pt[1]) for pt in stroke]
-                offset_strokes.append(shifted)
+
+        # Check raw offsets cache to avoid slow re-sampling when adjusting sliders
+        if cache_key in self._raw_offsets_cache:
+            raw_offsets = self._raw_offsets_cache[cache_key]
+        else:
+            t0 = time.time()
+            raw_offsets = self.neural_model.sample_line(text, style_id=style_id, bias=bias)  # type: ignore
+            if len(raw_offsets) == 0:
+                return [], 0.0
+            self._raw_offsets_cache[cache_key] = raw_offsets
             preview = text[:28] + ("..." if len(text) > 28 else "")
-            print(f"      [CACHE] Using cached neural strokes for \"{preview}\"")
-            return offset_strokes, width
+            print(f"      [SYNTH] Line \"{preview}\" sampled ({len(raw_offsets)} points, {time.time() - t0:.2f}s)")
 
-        t0 = time.time()
-        # Sample raw offsets from neural model
-        raw_offsets = self.neural_model.sample_line(text, style_id=style_id, bias=bias)  # type: ignore
-        if len(raw_offsets) == 0:
-            return [], 0.0
-
+        # Convert raw offsets to physical millimeters
         polylines, total_width = self._process_offsets_to_mm(
-            raw_offsets, origin_x=0.0, baseline_y=0.0, target_cap_height_mm=target_cap_height_mm
+            raw_offsets, origin_x=origin_x, baseline_y=baseline_y, target_cap_height_mm=target_cap_height_mm
         )
 
-        # Cache normalized line
-        self._line_cache[cache_key] = (polylines, total_width)
+        # Apply interactive fine-tuning parameters (slant shear, micro-jitter, tremor)
+        if slant_deg != 0.0 or jitter_mm > 0.0 or wobble > 0.0:
+            polylines = transform_strokes(
+                polylines,
+                baseline_y=baseline_y,
+                origin_x=origin_x,
+                slant_deg=slant_deg,
+                scale_mult=1.0,
+                jitter_mm=jitter_mm,
+                wobble=wobble
+            )
 
-        # Shift to current origin
-        offset_strokes = []
-        for stroke in polylines:
-            shifted = [(origin_x + pt[0], baseline_y + pt[1]) for pt in stroke]
-            offset_strokes.append(shifted)
-
-        preview = text[:28] + ("..." if len(text) > 28 else "")
-        print(f"      [SYNTH] Line \"{preview}\" mapped to paper ({len(polylines)} strokes, {time.time() - t0:.2f}s)")
-        return offset_strokes, total_width
+        return polylines, total_width
 
     def _process_offsets_to_mm(self,
                                offsets: np.ndarray,
@@ -457,6 +498,16 @@ class VasquezHandwritingEngine:
         and maps coordinates to physical millimeters on the notebook paper.
         """
         offsets = offsets.copy()
+
+        # 1. Strip priming residual drift before the first pen-up jump to the text
+        eos_indices = np.where(offsets[:, 2] == 1.0)[0]
+        if len(eos_indices) > 0 and eos_indices[0] < 6:
+            # Skip the residual priming points up to and including the first eos=1.0
+            offsets = offsets[eos_indices[0] + 1:]
+
+        if len(offsets) == 0:
+            return [], 0.0
+
         offsets[:, :2] *= 1.5
 
         if DRAWING_AVAILABLE:

@@ -396,10 +396,10 @@ class CopyCatStudio:
         self.paned = paned
 
         # ----------------------------------------------------------------------
-        # Left Panel (Sidebar with Notebook Tabs)
+        # Left Panel (Unified Studio Workspace - All controls & Editor visible)
         # ----------------------------------------------------------------------
-        left_container = ttk.Frame(paned, style="Panel.TFrame", width=430)
-        paned.add(left_container, minsize=370)
+        left_container = ttk.Frame(paned, style="Panel.TFrame", width=440)
+        paned.add(left_container, minsize=380)
 
         # Header bar with Brand and Theme Switcher
         header_bar = ttk.Frame(left_container, style="Panel.TFrame", padding=(12, 10))
@@ -424,31 +424,18 @@ class CopyCatStudio:
         self.theme_cb.pack(side=tk.LEFT)
         self.theme_cb.bind("<<ComboboxSelected>>", self._on_theme_changed)
 
-        # Notebook tabs
-        self.notebook = ttk.Notebook(left_container)
-        self.notebook.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
+        # 1. Style & Parameters Card
+        self._build_style_panel(left_container)
 
-        # Tab 1: Editor & Source
-        tab_editor = ttk.Frame(self.notebook, style="Panel.TFrame", padding=10)
-        self.notebook.add(tab_editor, text="Source")
+        # 2. Document Source Editor Card (Expands vertically)
+        self._build_editor_panel(left_container)
 
-        # Tab 2: Style & Tuning
-        tab_style = ttk.Frame(self.notebook, style="Panel.TFrame", padding=10)
-        self.notebook.add(tab_style, text="Style")
+        # 3. Machine & Action Bar (Bottom of sidebar)
+        self._build_action_panel(left_container)
 
-        # Tab 3: Hardware & Streamer
-        tab_hardware = ttk.Frame(self.notebook, style="Panel.TFrame", padding=10)
-        self.notebook.add(tab_hardware, text="Machine")
-
-        # Tab 4: Generation Logs
-        tab_logs = ttk.Frame(self.notebook, style="Panel.TFrame", padding=10)
-        self.notebook.add(tab_logs, text="Logs")
-        self.tab_logs = tab_logs
-
-        self._build_editor_tab(tab_editor)
-        self._build_style_tab(tab_style)
-        self._build_hardware_tab(tab_hardware)
-        self._build_logs_tab(tab_logs)
+        # 4. Hidden / Popout Windows for Machine Settings and Logs
+        self._build_logs_window()
+        self._build_machine_window()
 
         # ----------------------------------------------------------------------
         # Right Panel (Interactive Canvas & Viewport)
@@ -458,32 +445,76 @@ class CopyCatStudio:
 
         self._build_canvas_view(right_container)
 
-    def _build_editor_tab(self, parent: ttk.Frame):
-        """Embedded Markdown source editor with disk reload & re-render buttons."""
-        file_row = ttk.Frame(parent, style="Panel.TFrame")
-        file_row.pack(fill=tk.X, pady=(0, 8))
+        # Auto-fit page on canvas startup
+        self.root.after(150, self._fit_page)
+
+    def _build_style_panel(self, parent: ttk.Frame):
+        """Top card: Style dropdown, fine-tuning sliders, and instant parameter controls."""
+        card = ttk.Frame(parent, style="Panel.TFrame", padding=(12, 4, 12, 6))
+        card.pack(fill=tk.X)
+
+        row_style = ttk.Frame(card, style="Panel.TFrame")
+        row_style.pack(fill=tk.X, pady=(0, 2))
+        ttk.Label(row_style, text="Handwriting Style:", style="Header.TLabel").pack(side=tk.LEFT)
+
+        btn_reset = ttk.Button(row_style, text="Reset", width=6, command=self._on_reset_sliders)
+        btn_reset.pack(side=tk.RIGHT)
+
+        style_choices = list(config.STYLE_PRESETS.keys())
+        self.style_cb = ttk.Combobox(
+            card,
+            textvariable=self.style_var,
+            values=style_choices,
+            state="readonly",
+            font=("sans-serif", 9, "bold")
+        )
+        self.style_cb.pack(fill=tk.X, pady=(2, 4))
+        self.style_cb.bind("<<ComboboxSelected>>", self._on_style_selected)
+
+        desc_lbl = ttk.Label(
+            card,
+            textvariable=self.style_desc_var,
+            wraplength=400,
+            style="Muted.TLabel"
+        )
+        desc_lbl.pack(fill=tk.X, pady=(0, 6))
+
+        slider_box = ttk.Frame(card, style="Panel.TFrame")
+        slider_box.pack(fill=tk.X, pady=(0, 4))
+
+        self._create_slider(slider_box, "Slant Angle (°):", self.slant_var, -5.0, 32.0)
+        self._create_slider(slider_box, "Text Scale:", self.scale_var, 0.20, 0.55)
+        self._create_slider(slider_box, "Baseline Jitter (mm):", self.jitter_var, 0.0, 0.50)
+        self._create_slider(slider_box, "Micro-Wobble / Tremor:", self.wobble_var, 0.0, 0.12)
+
+    def _build_editor_panel(self, parent: ttk.Frame):
+        """Middle card: Full Markdown editor taking available vertical space."""
+        card = ttk.Frame(parent, style="Panel.TFrame", padding=(12, 4, 12, 4))
+        card.pack(fill=tk.BOTH, expand=True)
+
+        file_row = ttk.Frame(card, style="Panel.TFrame")
+        file_row.pack(fill=tk.X, pady=(0, 4))
 
         self.file_label = ttk.Label(file_row, text=os.path.basename(self.current_filepath), style="Header.TLabel")
         self.file_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
-        btn_browse = ttk.Button(file_row, text="Browse", command=self._on_browse_file)
+        btn_browse = ttk.Button(file_row, text="Browse", width=7, command=self._on_browse_file)
         btn_browse.pack(side=tk.RIGHT, padx=(4, 0))
 
-        btn_reload = ttk.Button(file_row, text="Reload Disk", command=self._on_reload_disk)
+        btn_reload = ttk.Button(file_row, text="Reload", width=7, command=self._on_reload_disk)
         btn_reload.pack(side=tk.RIGHT)
 
-        # Editor text area
-        text_frame = tk.Frame(parent, bg=self.theme["border"], bd=1)
+        text_frame = tk.Frame(card, bg=self.theme["border"], bd=1)
         self.editor_frame = text_frame
-        text_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 8))
+        text_frame.pack(fill=tk.BOTH, expand=True, pady=(2, 6))
 
         self.editor_txt = tk.Text(
             text_frame,
             wrap=tk.WORD,
-            bg=DARK_INPUT,
-            fg=DARK_TEXT,
-            insertbackground=DARK_ACCENT,
-            selectbackground=DARK_ACCENT,
+            bg=self.theme["input"],
+            fg=self.theme["text"],
+            insertbackground=self.theme["accent"],
+            selectbackground=self.theme["accent"],
             selectforeground="#ffffff",
             font=("monospace", 10),
             padx=8,
@@ -498,92 +529,50 @@ class CopyCatStudio:
         scroll.pack(side=tk.RIGHT, fill=tk.Y)
         self.editor_txt.configure(yscrollcommand=scroll.set)
 
-        # Action bar
-        action_bar = ttk.Frame(parent, style="Panel.TFrame")
+        action_bar = ttk.Frame(card, style="Panel.TFrame")
         action_bar.pack(fill=tk.X)
 
         btn_apply = ttk.Button(action_bar, text="Apply Changes & Re-render", style="Primary.TButton", command=self._on_apply_editor)
         btn_apply.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 4))
 
-        btn_save = ttk.Button(action_bar, text="Save to Disk", command=self._on_save_editor_to_disk)
+        btn_save = ttk.Button(action_bar, text="Save Disk", width=9, command=self._on_save_editor_to_disk)
         btn_save.pack(side=tk.RIGHT)
 
-    def _build_style_tab(self, parent: ttk.Frame):
-        """Handwriting style dropdown and persistent fine-tuning sliders."""
-        # Style selector
-        lbl_style = ttk.Label(parent, text="Handwriting Style Preset", style="Header.TLabel")
-        lbl_style.pack(anchor=tk.W, pady=(0, 4))
+    def _build_action_panel(self, parent: ttk.Frame):
+        """Bottom card: Output actions, hardware communication, and console log viewer."""
+        card = ttk.Frame(parent, style="Panel.TFrame", padding=(12, 4, 12, 10))
+        card.pack(fill=tk.X)
 
-        style_choices = list(config.STYLE_PRESETS.keys())
-        self.style_cb = ttk.Combobox(
-            parent,
-            textvariable=self.style_var,
-            values=style_choices,
-            state="readonly",
-            font=("sans-serif", 10, "bold")
-        )
-        self.style_cb.pack(fill=tk.X, pady=(0, 4))
-        self.style_cb.bind("<<ComboboxSelected>>", self._on_style_selected)
+        btn_row = ttk.Frame(card, style="Panel.TFrame")
+        btn_row.pack(fill=tk.X, pady=(0, 4))
 
-        desc_lbl = ttk.Label(
-            parent,
-            textvariable=self.style_desc_var,
-            wraplength=380,
-            style="Muted.TLabel"
-        )
-        desc_lbl.pack(fill=tk.X, pady=(0, 12))
+        btn_export = ttk.Button(btn_row, text="Export GRBL G-Code", command=self._on_export_gcode)
+        btn_export.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 4))
 
-        # Fine-tuning sliders
-        sliders_lbl = ttk.Label(parent, text="Fine-Tuning Parameters", style="Header.TLabel")
-        sliders_lbl.pack(anchor=tk.W, pady=(0, 4))
+        btn_stream = ttk.Button(btn_row, text="Stream to Plotter", style="Primary.TButton", command=self._on_stream_plotter)
+        btn_stream.pack(side=tk.RIGHT, fill=tk.X, expand=True)
 
-        slider_box = ttk.Frame(parent, style="Panel.TFrame")
-        slider_box.pack(fill=tk.X, pady=(0, 8))
+        tool_row = ttk.Frame(card, style="Panel.TFrame")
+        tool_row.pack(fill=tk.X)
 
-        self._create_slider(slider_box, "Slant Angle (°):", self.slant_var, -5.0, 32.0)
-        self._create_slider(slider_box, "Baseline Jitter (mm):", self.jitter_var, 0.0, 0.50)
-        self._create_slider(slider_box, "Micro-Wobble / Tremor:", self.wobble_var, 0.0, 0.12)
-        self._create_slider(slider_box, "Kerning Variance (mm):", self.kerning_var, 0.0, 0.30)
-        self._create_slider(slider_box, "Text Scale:", self.scale_var, 0.20, 0.55)
+        btn_mach = ttk.Button(tool_row, text="Machine & Serial...", command=self._open_machine_dialog)
+        btn_mach.pack(side=tk.LEFT)
 
-        btn_reset = ttk.Button(parent, text="Reset Sliders to Style Defaults", command=self._on_reset_sliders)
-        btn_reset.pack(fill=tk.X, pady=(4, 12))
+        btn_logs = ttk.Button(tool_row, text="Generation Logs...", command=self._open_logs_window)
+        btn_logs.pack(side=tk.RIGHT)
 
-        # Re-render button
-        btn_render = ttk.Button(parent, text="Re-render Canvas", style="Primary.TButton", command=self.update_pipeline)
-        btn_render.pack(fill=tk.X)
+    def _build_logs_window(self):
+        """Constructs dedicated generation logs popout window."""
+        win = tk.Toplevel(self.root)
+        win.title("CopyCat - Generation Logs Console")
+        win.geometry("640x480")
+        win.configure(bg=self.theme["panel"])
+        win.protocol("WM_DELETE_WINDOW", win.withdraw)
+        win.withdraw()
+        self.logs_win = win
 
-    def _build_hardware_tab(self, parent: ttk.Frame):
-        """Machine connection settings and G-code export/streaming controls."""
-        sec_lbl = ttk.Label(parent, text="Machine Communication", style="Header.TLabel")
-        sec_lbl.pack(anchor=tk.W, pady=(0, 8))
-
-        port_row = ttk.Frame(parent, style="Panel.TFrame")
-        port_row.pack(fill=tk.X, pady=(0, 6))
-        ttk.Label(port_row, text="Serial Port:", style="Panel.TLabel", width=12).pack(side=tk.LEFT)
-        port_entry = ttk.Entry(port_row, textvariable=self.port_var, width=16)
-        port_entry.pack(side=tk.LEFT, padx=4)
-        ttk.Button(port_row, text="Scan Ports", command=self._on_scan_ports).pack(side=tk.LEFT)
-
-        baud_row = ttk.Frame(parent, style="Panel.TFrame")
-        baud_row.pack(fill=tk.X, pady=(0, 6))
-        ttk.Label(baud_row, text="Baud Rate:", style="Panel.TLabel", width=12).pack(side=tk.LEFT)
-        baud_cb = ttk.Combobox(baud_row, textvariable=self.baud_var, values=[115200, 250000, 57600], width=12, state="readonly")
-        baud_cb.pack(side=tk.LEFT, padx=4)
-
-        dry_chk = ttk.Checkbutton(parent, text="Dry-Run Simulation Mode (No hardware)", variable=self.dry_run_var)
-        dry_chk.pack(anchor=tk.W, pady=(6, 14))
-
-        btn_export = ttk.Button(parent, text="Export GRBL G-Code", command=self._on_export_gcode)
-        btn_export.pack(fill=tk.X, pady=(0, 6))
-
-        btn_stream = ttk.Button(parent, text="Stream to Plotter Hardware", style="Primary.TButton", command=self._on_stream_plotter)
-        btn_stream.pack(fill=tk.X)
-
-    def _build_logs_tab(self, parent: ttk.Frame):
-        """Dedicated in-app generation logs console."""
-        top_row = ttk.Frame(parent, style="Panel.TFrame")
-        top_row.pack(fill=tk.X, pady=(0, 8))
+        top_row = ttk.Frame(win, style="Panel.TFrame", padding=(10, 8))
+        top_row.pack(fill=tk.X)
 
         lbl = ttk.Label(top_row, text="Pipeline Logs", style="Header.TLabel")
         lbl.pack(side=tk.LEFT)
@@ -598,8 +587,8 @@ class CopyCatStudio:
         chk_scroll = ttk.Checkbutton(top_row, text="Auto-scroll", variable=self.auto_scroll_var)
         chk_scroll.pack(side=tk.RIGHT, padx=8)
 
-        log_frame = tk.Frame(parent, bg=self.theme["border"], bd=1)
-        log_frame.pack(fill=tk.BOTH, expand=True)
+        log_frame = tk.Frame(win, bg=self.theme["border"], bd=1)
+        log_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
         self.log_frame = log_frame
 
         self.log_txt = tk.Text(
@@ -622,6 +611,59 @@ class CopyCatStudio:
 
         self._configure_log_tags()
 
+    def _open_logs_window(self):
+        """Displays the generation logs popout console."""
+        if hasattr(self, "logs_win"):
+            self.logs_win.deiconify()
+            self.logs_win.lift()
+            self.logs_win.focus_set()
+
+    def _show_logs_tab(self):
+        """Shortcut from task bar to open logs console."""
+        self._open_logs_window()
+
+    def _build_machine_window(self):
+        """Constructs dedicated machine settings popout dialog."""
+        win = tk.Toplevel(self.root)
+        win.title("CopyCat - Machine & Serial Settings")
+        win.geometry("420x260")
+        win.configure(bg=self.theme["panel"])
+        win.protocol("WM_DELETE_WINDOW", win.withdraw)
+        win.withdraw()
+        self.machine_win = win
+
+        content = ttk.Frame(win, style="Panel.TFrame", padding=16)
+        content.pack(fill=tk.BOTH, expand=True)
+
+        sec_lbl = ttk.Label(content, text="Plotter Hardware Communication", style="Header.TLabel")
+        sec_lbl.pack(anchor=tk.W, pady=(0, 12))
+
+        port_row = ttk.Frame(content, style="Panel.TFrame")
+        port_row.pack(fill=tk.X, pady=(0, 8))
+        ttk.Label(port_row, text="Serial Port:", style="Panel.TLabel", width=12).pack(side=tk.LEFT)
+        port_entry = ttk.Entry(port_row, textvariable=self.port_var, width=16)
+        port_entry.pack(side=tk.LEFT, padx=4)
+        ttk.Button(port_row, text="Scan Ports", command=self._on_scan_ports).pack(side=tk.LEFT)
+
+        baud_row = ttk.Frame(content, style="Panel.TFrame")
+        baud_row.pack(fill=tk.X, pady=(0, 8))
+        ttk.Label(baud_row, text="Baud Rate:", style="Panel.TLabel", width=12).pack(side=tk.LEFT)
+        baud_cb = ttk.Combobox(baud_row, textvariable=self.baud_var, values=[115200, 250000, 57600], width=12, state="readonly")
+        baud_cb.pack(side=tk.LEFT, padx=4)
+
+        dry_chk = ttk.Checkbutton(content, text="Dry-Run Simulation Mode (No hardware required)", variable=self.dry_run_var)
+        dry_chk.pack(anchor=tk.W, pady=(8, 16))
+
+        btn_close = ttk.Button(content, text="Done", style="Primary.TButton", command=win.withdraw)
+        btn_close.pack(fill=tk.X)
+
+    def _open_machine_dialog(self):
+        """Displays the machine settings dialog."""
+        if hasattr(self, "machine_win"):
+            self.machine_win.deiconify()
+            self.machine_win.lift()
+            self.machine_win.focus_set()
+
     def _on_theme_changed(self, event=None):
         """Callback when user selects a different theme from the combobox."""
         selected_name = self.theme_cb.get()
@@ -630,11 +672,6 @@ class CopyCatStudio:
                 self._apply_theme(key)
                 print(f"[THEME] Switched theme to '{t_data['name']}'")
                 break
-
-    def _show_logs_tab(self):
-        """Switches the sidebar notebook to the Generation Logs tab."""
-        if hasattr(self, "notebook") and hasattr(self, "tab_logs"):
-            self.notebook.select(self.tab_logs)
 
     def _on_clear_logs(self):
         """Clears in-app log viewer."""
@@ -1053,7 +1090,7 @@ class CopyCatStudio:
 
         # Center paper on canvas + user pan offsets
         center_x = (canv_w - paper_w) / 2.0 + self.pan_x
-        center_y = 25.0 + self.pan_y
+        center_y = max(15.0, (canv_h - paper_h) / 2.0) + self.pan_y
 
         self._paper_origin_x = center_x
         self._paper_origin_y = center_y

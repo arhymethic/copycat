@@ -218,10 +218,15 @@ class LayoutEngine:
         """Renders a centered header with larger line jump and prominence."""
         preset = self.get_style_preset(self.style)
         use_rnn = (self.engine_type == "rnn" or "rnn_style_id" in preset) and self._check_rnn_engine()
+        scale_ratio = (self.base_scale / 0.34) if hasattr(self, "base_scale") else 1.0
+
         if use_rnn:
             import rnn_engine
             style_id = preset.get("rnn_style_id", 1)
-            est_width = len(text) * 3.6
+            slant_deg = preset.get("slant", 0.0)
+            jitter_mm = preset.get("jitter", 0.0)
+            wobble = preset.get("wobble", 0.0)
+            est_width = len(text) * 3.2 * scale_ratio
             mid_x = (self.cfg.margin_left + self.cfg.margin_right) / 2.0
             start_x = max(self.cfg.margin_left, mid_x - est_width / 2.0)
             if baseline_y > self.cfg.margin_bottom:
@@ -229,12 +234,15 @@ class LayoutEngine:
                 pages.append(current_page)
                 baseline_y = self.cfg.margin_top + self.cfg.baseline_spacing
             line_strokes, _ = rnn_engine.VASQUEZ_ENGINE.synthesize_line(
-                text=text[:70],
+                text=text[:72],
                 origin_x=start_x,
                 baseline_y=baseline_y,
                 style_id=style_id,
-                bias=0.95,
-                target_cap_height_mm=self.cap_height_mm * 1.3
+                bias=0.90,
+                target_cap_height_mm=self.cap_height_mm * 1.25 * scale_ratio,
+                slant_deg=slant_deg,
+                jitter_mm=jitter_mm,
+                wobble=wobble
             )
             current_page.strokes.extend(line_strokes)
             current_page.line_count += 1
@@ -293,16 +301,22 @@ class LayoutEngine:
 
         # Check if neural RNN inference is available and requested
         use_rnn = (self.engine_type == "rnn" or "rnn_style_id" in preset) and self._check_rnn_engine()
+        scale_ratio = (self.base_scale / 0.34) if hasattr(self, "base_scale") else 1.0
+
         if use_rnn:
             import rnn_engine
             style_id = preset.get("rnn_style_id", 1)
+            slant_deg = preset.get("slant", 0.0)
+            jitter_mm = preset.get("jitter", 0.0)
+            wobble = preset.get("wobble", 0.0)
             bias = 0.85
             words = text.split(" ")
             line_words: List[str] = []
             curr_line_chars = 0
-            # Target line character budget based on page margin width (max 70 chars for model)
+            # Line character budget filling printable width across page (up to model max 75 chars)
             avail_width_mm = self.cfg.margin_right - start_x
-            max_line_chars = min(68, max(20, int(avail_width_mm / 2.6)))
+            char_width_est = max(1.6, 2.0 * scale_ratio)
+            max_line_chars = min(74, max(24, int(avail_width_mm / char_width_est)))
 
             lines_to_render: List[Tuple[str, float]] = []
             for w in words:
@@ -333,7 +347,10 @@ class LayoutEngine:
                     baseline_y=baseline_y,
                     style_id=style_id,
                     bias=bias,
-                    target_cap_height_mm=self.cap_height_mm
+                    target_cap_height_mm=self.cap_height_mm * scale_ratio,
+                    slant_deg=slant_deg,
+                    jitter_mm=jitter_mm,
+                    wobble=wobble
                 )
                 current_page.strokes.extend(line_strokes)
                 current_page.line_count += 1
