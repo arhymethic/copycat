@@ -564,84 +564,132 @@ class DiskLineCache:
 MATH_SYMBOLS = set("=+*/^_<>[]{}|\\$%&~")
 
 
-def render_math_equation(text: str,
-                         origin_x: float,
-                         baseline_y: float,
-                         target_cap_height_mm: float = 3.8,
-                         slant_deg: float = 0.0,
-                         jitter_mm: float = 0.0,
-                         wobble: float = 0.0) -> Tuple[List[Stroke], float]:
+def synthesize_hybrid_line(text: str,
+                           origin_x: float,
+                           baseline_y: float,
+                           model_engine,
+                           style_id: int = 1,
+                           bias: float = 0.85,
+                           target_cap_height_mm: float = 3.8,
+                           slant_deg: float = 0.0,
+                           jitter_mm: float = 0.0,
+                           wobble: float = 0.0,
+                           letter_spacing: float = 1.0,
+                           space_mult: float = 1.0) -> Tuple[List[Stroke], float]:
     """
-    Renders mathematical equations, formulas, or expressions using single-stroke
-    vector typography, with double-bar '=' equal signs, multiplication asterisks,
-    slashes, and smart subscript/superscript placement.
+    Synthesizes a line containing mathematical symbols, operators, equations, or
+    subscripts/superscripts while preserving neural RNN handwriting for all words
+    and characters. Only missing math operators (=, +, *, /, ^, _) are rendered
+    with inline procedural single-stroke glyphs.
     """
-    scale = target_cap_height_mm / 14.0
-    effective_slant = slant_deg if slant_deg != 0.0 else -5.0
-    effective_jitter = max(0.04, jitter_mm)
-    effective_wobble = max(0.04, wobble)
+    val_chars = set(drawing.alphabet) - {'\x00'}
 
-    strokes: List[Stroke] = []
+    tokens = []
+    curr_text = []
+    for ch in text:
+        if ch in val_chars:
+            curr_text.append(ch)
+        else:
+            if curr_text:
+                tokens.append(('rnn', ''.join(curr_text)))
+                curr_text = []
+            tokens.append(('sym', ch))
+    if curr_text:
+        tokens.append(('rnn', ''.join(curr_text)))
+
+    all_strokes: List[Stroke] = []
     curr_x = origin_x
-    i = 0
-    n = len(text)
+    scale_sym = target_cap_height_mm / 14.0
+    base_space_w = 2.4 * (target_cap_height_mm / 3.8) * space_mult
 
-    while i < n:
-        ch = text[i]
-        if ch == '^':
-            # Superscript (e.g. ^2, ^x)
-            if i + 1 < n:
-                sup_ch = text[i + 1]
+    idx = 0
+    n = len(tokens)
+    while idx < n:
+        kind, val = tokens[idx]
+
+        # 1. Superscript operator (e.g. ^2, ^x)
+        if kind == 'sym' and val == '^' and idx + 1 < n:
+            next_kind, next_val = tokens[idx + 1]
+            sup_y = baseline_y - 2.0 * (target_cap_height_mm / 3.8)
+            sup_scale = target_cap_height_mm * 0.72
+
+            if next_kind == 'sym':
                 s_strokes, adv = stroke_font.render_word_strokes(
-                    sup_ch,
-                    origin_x=curr_x,
-                    baseline_y=baseline_y - 2.2 * (scale / (3.8 / 14.0)),
-                    scale=scale * 0.72,
-                    slant_deg=effective_slant,
-                    jitter_max=effective_jitter,
-                    kerning_var=0.0,
-                    wobble=effective_wobble
+                    next_val, curr_x, sup_y, sup_scale / 14.0,
+                    slant_deg if slant_deg != 0.0 else -5.0,
+                    max(0.04, jitter_mm), 0.0, max(0.04, wobble)
                 )
-                strokes.extend(s_strokes)
+                all_strokes.extend(s_strokes)
                 curr_x += adv
-                i += 2
-                continue
-        elif ch == '_':
-            # Subscript (e.g. _f, _i, _1)
-            if i + 1 < n:
-                sub_ch = text[i + 1]
+            else:
+                core = next_val.strip()
+                if core:
+                    raw_offsets = model_engine.get_or_sample_offsets(core, style_id=style_id, bias=bias)
+                    polys, width = model_engine._process_offsets_to_mm(
+                        raw_offsets, origin_x=curr_x, baseline_y=sup_y,
+                        target_cap_height_mm=sup_scale, letter_spacing=letter_spacing
+                    )
+                    all_strokes.extend(polys)
+                    curr_x += width
+            idx += 2
+            continue
+
+        # 2. Subscript operator (e.g. _f, _i, _1)
+        if kind == 'sym' and val == '_' and idx + 1 < n:
+            next_kind, next_val = tokens[idx + 1]
+            sub_y = baseline_y + 1.2 * (target_cap_height_mm / 3.8)
+            sub_scale = target_cap_height_mm * 0.72
+
+            if next_kind == 'sym':
                 s_strokes, adv = stroke_font.render_word_strokes(
-                    sub_ch,
-                    origin_x=curr_x,
-                    baseline_y=baseline_y + 1.2 * (scale / (3.8 / 14.0)),
-                    scale=scale * 0.72,
-                    slant_deg=effective_slant,
-                    jitter_max=effective_jitter,
-                    kerning_var=0.0,
-                    wobble=effective_wobble
+                    next_val, curr_x, sub_y, sub_scale / 14.0,
+                    slant_deg if slant_deg != 0.0 else -5.0,
+                    max(0.04, jitter_mm), 0.0, max(0.04, wobble)
                 )
-                strokes.extend(s_strokes)
+                all_strokes.extend(s_strokes)
                 curr_x += adv
-                i += 2
-                continue
+            else:
+                core = next_val.strip()
+                if core:
+                    raw_offsets = model_engine.get_or_sample_offsets(core, style_id=style_id, bias=bias)
+                    polys, width = model_engine._process_offsets_to_mm(
+                        raw_offsets, origin_x=curr_x, baseline_y=sub_y,
+                        target_cap_height_mm=sub_scale, letter_spacing=letter_spacing
+                    )
+                    all_strokes.extend(polys)
+                    curr_x += width
+            idx += 2
+            continue
 
-        # Standard glyph, operator, or space
-        s_strokes, adv = stroke_font.render_word_strokes(
-            ch,
-            origin_x=curr_x,
-            baseline_y=baseline_y,
-            scale=scale,
-            slant_deg=effective_slant,
-            jitter_max=effective_jitter,
-            kerning_var=0.0,
-            wobble=effective_wobble
-        )
-        strokes.extend(s_strokes)
-        curr_x += adv
-        i += 1
+        # 3. Procedural symbol (=, +, *, /, etc.)
+        if kind == 'sym':
+            s_strokes, adv = stroke_font.render_word_strokes(
+                val, curr_x, baseline_y, scale_sym,
+                slant_deg if slant_deg != 0.0 else -5.0,
+                max(0.04, jitter_mm), 0.0, max(0.04, wobble)
+            )
+            all_strokes.extend(s_strokes)
+            curr_x += adv
+        else:
+            # 4. Neural RNN text chunk
+            l_spaces = len(val) - len(val.lstrip(' '))
+            r_spaces = len(val) - len(val.rstrip(' '))
+            core = val.strip()
 
-    total_width = curr_x - origin_x
-    return strokes, total_width
+            curr_x += l_spaces * base_space_w
+            if core:
+                raw_offsets = model_engine.get_or_sample_offsets(core, style_id=style_id, bias=bias)
+                polys, width = model_engine._process_offsets_to_mm(
+                    raw_offsets, origin_x=curr_x, baseline_y=baseline_y,
+                    target_cap_height_mm=target_cap_height_mm, letter_spacing=letter_spacing
+                )
+                all_strokes.extend(polys)
+                curr_x += width
+            curr_x += r_spaces * base_space_w
+
+        idx += 1
+
+    return all_strokes, curr_x - origin_x
 
 
 class VasquezHandwritingEngine:
@@ -774,26 +822,33 @@ class VasquezHandwritingEngine:
                         target_cap_height_mm: float = 3.8,
                         slant_deg: float = 0.0,
                         jitter_mm: float = 0.0,
-                        wobble: float = 0.0) -> Tuple[List[Stroke], float]:
+                        wobble: float = 0.0,
+                        letter_spacing: float = 1.0,
+                        space_mult: float = 1.0) -> Tuple[List[Stroke], float]:
         """
         Synthesizes a line of text:
-        1. Mathematical equations and expressions containing operators (=, +, *, /, ^, _)
-           are rendered via humanized single-stroke vector typography with full subscript/superscript support.
+        1. Lines containing mathematical operators (=, +, *, /, ^, _) use hybrid synthesis:
+           all words, variables, and numbers use authentic neural RNN handwriting in the active
+           author style, while missing math operators are drawn inline with single-stroke glyphs.
         2. Question headers starting with capital 'Q' (e.g. Q1., Q2.) render 'Q' with vector typography
            and the remainder via Alex Graves neural RNN.
-        3. Standard sentences and prose are synthesized with authentic Alex Graves RNN neural handwriting,
-           locked to notebook ruled baselines.
+        3. Regular sentences use continuous neural handwriting, with word-spacing scaled by space_mult.
         """
-        # 1. Math formulas and equations: render with vector typography
+        # 1. Math formulas and equations: hybrid synthesis with neural variables & vector operators
         if any(ch in MATH_SYMBOLS for ch in text):
-            return render_math_equation(
+            return synthesize_hybrid_line(
                 text=text,
                 origin_x=origin_x,
                 baseline_y=baseline_y,
+                model_engine=self,
+                style_id=style_id,
+                bias=bias,
                 target_cap_height_mm=target_cap_height_mm,
                 slant_deg=slant_deg,
                 jitter_mm=jitter_mm,
-                wobble=wobble
+                wobble=wobble,
+                letter_spacing=letter_spacing,
+                space_mult=space_mult
             )
 
         # 2. Leading capital 'Q' in question headers (Q1., Q2., etc.)
@@ -817,16 +872,45 @@ class VasquezHandwritingEngine:
             eff_origin_x = origin_x + q_adv
             eff_text = text[1:].lstrip()
 
+        # 3. Regular text: if space_mult is adjusted from 1.0, synthesize word-by-word with custom space gap
+        if abs(space_mult - 1.0) > 0.02 and " " in eff_text:
+            words = eff_text.split(" ")
+            all_strokes = list(prefix_strokes)
+            curr_x = eff_origin_x
+            base_space = 2.4 * (target_cap_height_mm / 3.8) * space_mult
+
+            for w_idx, w in enumerate(words):
+                if not w:
+                    curr_x += base_space
+                    continue
+                raw_offsets = self.get_or_sample_offsets(w, style_id=style_id, bias=bias)
+                if len(raw_offsets) > 0:
+                    polys, w_width = self._process_offsets_to_mm(
+                        raw_offsets, origin_x=curr_x, baseline_y=baseline_y,
+                        target_cap_height_mm=target_cap_height_mm, letter_spacing=letter_spacing
+                    )
+                    if slant_deg != 0.0 or jitter_mm > 0.0 or wobble > 0.0:
+                        polys = transform_strokes(
+                            polys, baseline_y=baseline_y, origin_x=curr_x,
+                            slant_deg=slant_deg, scale_mult=1.0, jitter_mm=jitter_mm, wobble=wobble
+                        )
+                    all_strokes.extend(polys)
+                    curr_x += w_width
+                if w_idx < len(words) - 1:
+                    curr_x += base_space
+
+            return all_strokes, curr_x - origin_x
+
+        # Single continuous line synthesis
         raw_offsets = self.get_or_sample_offsets(eff_text, style_id=style_id, bias=bias)
         if len(raw_offsets) == 0:
             return prefix_strokes, eff_origin_x - origin_x
 
-        # Convert raw offsets to physical millimeters
         polylines, total_width = self._process_offsets_to_mm(
-            raw_offsets, origin_x=eff_origin_x, baseline_y=baseline_y, target_cap_height_mm=target_cap_height_mm
+            raw_offsets, origin_x=eff_origin_x, baseline_y=baseline_y,
+            target_cap_height_mm=target_cap_height_mm, letter_spacing=letter_spacing
         )
 
-        # Apply interactive fine-tuning parameters (slant shear, micro-jitter, tremor)
         if slant_deg != 0.0 or jitter_mm > 0.0 or wobble > 0.0:
             polylines = transform_strokes(
                 polylines,
@@ -845,7 +929,8 @@ class VasquezHandwritingEngine:
                                offsets: np.ndarray,
                                origin_x: float,
                                baseline_y: float,
-                               target_cap_height_mm: float) -> Tuple[List[Stroke], float]:
+                               target_cap_height_mm: float,
+                               letter_spacing: float = 1.0) -> Tuple[List[Stroke], float]:
         """
         Applies drawing.py pipeline from sjvasquez/handwriting-synthesis and maps
         coordinates to physical millimeters locked to notebook ruled baselines.
@@ -875,7 +960,27 @@ class VasquezHandwritingEngine:
         if DRAWING_AVAILABLE:
             coords = drawing.offsets_to_coords(offsets)
             coords = drawing.denoise(coords)
-            coords[:, :2] = drawing.align(coords[:, :2])
+            span_x = float(coords[:, 0].max() - coords[:, 0].min())
+            if span_x < 3.0 or len(coords) < 15:
+                coords[:, 1] -= float(np.median(coords[:, 1]))
+            else:
+                X = coords[:, 0].reshape(-1, 1)
+                Y = coords[:, 1].reshape(-1, 1)
+                X_mat = np.concatenate([np.ones([X.shape[0], 1], dtype=np.float32), X], axis=1)
+                try:
+                    offset, slope = np.linalg.inv(X_mat.T.dot(X_mat)).dot(X_mat.T).dot(Y).squeeze()
+                    if abs(slope) > 0.35:
+                        slope = 0.0
+                        offset = float(np.median(coords[:, 1]))
+                    theta = float(np.arctan(slope))
+                    rot = np.array(
+                        [[np.cos(theta), -np.sin(theta)],
+                         [np.sin(theta), np.cos(theta)]],
+                        dtype=np.float32
+                    )
+                    coords[:, :2] = np.dot(coords[:, :2], rot) - offset
+                except Exception:
+                    coords[:, 1] -= float(np.median(coords[:, 1]))
         else:
             coords = np.concatenate([np.cumsum(offsets[:, :2], axis=0), offsets[:, 2:3]], axis=1)
 
@@ -893,8 +998,8 @@ class VasquezHandwritingEngine:
         RAW_BASELINE_Y = 5.0
 
         scale_y = target_cap_height_mm / RAW_CAP_HEIGHT
-        # Proportional aspect ratio for natural student cursive handwriting
-        scale_x = scale_y * 0.58
+        # Proportional aspect ratio for natural student cursive handwriting with letter spacing adjustment
+        scale_x = scale_y * 0.58 * letter_spacing
 
         # Convert to polylines separated by end-of-stroke (eos == 1.0)
         polylines: List[Stroke] = []

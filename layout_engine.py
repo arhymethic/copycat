@@ -50,6 +50,7 @@ class LayoutEngine:
                  custom_jitter: Optional[float] = None,
                  custom_wobble: Optional[float] = None,
                  custom_kerning: Optional[float] = None,
+                 custom_space_width: Optional[float] = None,
                  custom_scale: Optional[float] = None):
         self.cfg = cfg or config.DEFAULT_CONFIG
         self.engine_type = engine_type.lower()
@@ -57,7 +58,8 @@ class LayoutEngine:
         self.custom_slant = custom_slant
         self.custom_jitter = custom_jitter
         self.custom_wobble = custom_wobble
-        self.custom_kerning = custom_kerning
+        self.custom_kerning = custom_kerning if custom_kerning is not None else 1.0
+        self.custom_space_width = custom_space_width if custom_space_width is not None else 1.0
         self.custom_scale = custom_scale
         self.rnn_available = self._check_rnn_engine()
         self.cap_height_mm = 3.8
@@ -254,7 +256,9 @@ class LayoutEngine:
                 target_cap_height_mm=self.cap_height_mm * 1.15 * scale_ratio,
                 slant_deg=slant_deg,
                 jitter_mm=jitter_mm,
-                wobble=wobble
+                wobble=wobble,
+                letter_spacing=self.custom_kerning,
+                space_mult=self.custom_space_width
             )
             # Precisely center between margins based on synthesized width
             correct_x = max(self.cfg.margin_left, mid_x - actual_width / 2.0)
@@ -285,7 +289,7 @@ class LayoutEngine:
 
         words = text.split(" ")
         curr_x = start_x
-        space_w = stroke_font.measure_text_width(" ", scale, variant=variant)
+        space_w = stroke_font.measure_text_width(" ", scale, variant=variant) * self.custom_space_width
 
         for word in words:
             word_strokes, adv = stroke_font.render_word_strokes(
@@ -379,7 +383,9 @@ class LayoutEngine:
                     target_cap_height_mm=self.cap_height_mm * scale_ratio,
                     slant_deg=slant_deg,
                     jitter_mm=jitter_mm,
-                    wobble=wobble
+                    wobble=wobble,
+                    letter_spacing=self.custom_kerning,
+                    space_mult=self.custom_space_width
                 )
                 current_page.strokes.extend(line_strokes)
                 current_page.line_count += 1
@@ -389,7 +395,7 @@ class LayoutEngine:
 
         variant = preset.get("font_variant", "simplex")
         scale = self.base_scale
-        space_w = stroke_font.measure_text_width(" ", scale, variant=variant)
+        space_w = stroke_font.measure_text_width(" ", scale, variant=variant) * self.custom_space_width
 
         words = text.split(" ")
         curr_x = start_x
@@ -437,7 +443,7 @@ class LayoutEngine:
                 scale=scale,
                 slant_deg=preset["slant"],
                 jitter_max=preset["jitter"],
-                kerning_var=preset["kerning_var"],
+                kerning_var=preset["kerning_var"] * self.custom_kerning,
                 wobble=preset["wobble"],
                 arm_drift=arm_drift,
                 variant=variant

@@ -193,7 +193,8 @@ class CopyCatStudio:
         self.slant_var = tk.DoubleVar(value=config.STYLE_PRESETS["natural"]["slant"])
         self.jitter_var = tk.DoubleVar(value=config.STYLE_PRESETS["natural"]["jitter"])
         self.wobble_var = tk.DoubleVar(value=config.STYLE_PRESETS["natural"]["wobble"])
-        self.kerning_var = tk.DoubleVar(value=config.STYLE_PRESETS["natural"]["kerning_var"])
+        self.kerning_var = tk.DoubleVar(value=1.00)
+        self.space_width_var = tk.DoubleVar(value=1.00)
         self.scale_var = tk.DoubleVar(value=0.34)
         self.style_desc_var = tk.StringVar(value=config.STYLE_PRESETS["natural"]["description"])
 
@@ -484,6 +485,8 @@ class CopyCatStudio:
 
         self._create_slider(slider_box, "Slant Angle (°):", self.slant_var, -5.0, 32.0)
         self._create_slider(slider_box, "Text Scale:", self.scale_var, 0.20, 0.55)
+        self._create_slider(slider_box, "Letter Spacing:", self.kerning_var, 0.70, 1.60)
+        self._create_slider(slider_box, "Spacebar Gap:", self.space_width_var, 0.50, 2.50)
         self._create_slider(slider_box, "Baseline Jitter (mm):", self.jitter_var, 0.0, 0.50)
         self._create_slider(slider_box, "Micro-Wobble / Tremor:", self.wobble_var, 0.0, 0.12)
 
@@ -889,7 +892,8 @@ class CopyCatStudio:
             self.slant_var.set(preset["slant"])
             self.jitter_var.set(preset["jitter"])
             self.wobble_var.set(preset["wobble"])
-            self.kerning_var.set(preset["kerning_var"])
+            self.kerning_var.set(1.00)
+            self.space_width_var.set(1.00)
             self.scale_var.set(0.34 * preset.get("scale_mult", 1.0))
             print(f"[STYLE] Reset parameters to default values for '{key}'.")
             self.update_pipeline()
@@ -993,6 +997,7 @@ class CopyCatStudio:
             custom_jitter=self.jitter_var.get(),
             custom_wobble=self.wobble_var.get(),
             custom_kerning=self.kerning_var.get(),
+            custom_space_width=self.space_width_var.get(),
             custom_scale=self.scale_var.get()
         )
 
