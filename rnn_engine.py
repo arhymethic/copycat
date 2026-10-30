@@ -122,3 +122,4 @@ class RNNStrokeEngine:
 
         total_width = (max_x - min_x) * scale
         return scaled_strokes, total_width
+

@@ -28,6 +28,14 @@ try:
 except ImportError:
     PYGAME_AVAILABLE = False
 
+# Try importing tkinter safely
+try:
+    import tkinter as tk
+    from tkinter import ttk
+    TKINTER_AVAILABLE = True
+except ImportError:
+    TKINTER_AVAILABLE = False
+
 # Try importing Pillow for headless image export fallback
 try:
     from PIL import Image, ImageDraw
@@ -37,7 +45,7 @@ except ImportError:
 
 
 class Visualizer:
-    """Interactive notebook viewer built on Pygame with headless image fallback."""
+    """Interactive notebook viewer supporting both Pygame and Tkinter with headless fallback."""
 
     def __init__(self, pages: List[Page], cfg: Optional[config.PlotterConfig] = None):
         self.pages = pages or [Page(page_number=1)]
@@ -45,29 +53,157 @@ class Visualizer:
         self.current_page_idx = 0
         self.approval_decision: Optional[bool] = None
 
-    def show(self, animate: bool = True) -> Optional[bool]:
+    def show(self, animate: bool = True, backend: str = "auto") -> Optional[bool]:
         """
-        Launches the preview. If GUI display is available, opens interactive
-        Pygame window. If headless, exports PNG preview images.
+        Launches the preview.
+        - backend='pygame': Uses Pygame window
+        - backend='tkinter': Uses Tkinter window
+        - backend='auto': Prefers Pygame if installed, otherwise Tkinter, then headless PNG.
         
         Returns:
             True if user explicitly approved (pressed 'Y'),
             False if user cancelled (pressed 'N' or ESC),
             None if window closed normally for console prompt.
         """
-        # Check if Pygame and a graphical display environment exist
-        has_display = bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY") or sys.platform == "win32" or sys.platform == "darwin")
-        
-        if PYGAME_AVAILABLE and has_display:
+        has_display = bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY") or sys.platform in ("win32", "darwin"))
+        backend = (backend or "auto").lower()
+
+        # 1. Try Pygame if requested or auto
+        if (backend in ("auto", "pygame")) and PYGAME_AVAILABLE and has_display:
             try:
                 return self._run_pygame_loop(animate=animate)
             except Exception as e:
-                print(f"[VISUALIZER] Pygame GUI initialization failed: {e}")
-                print("[VISUALIZER] Falling back to headless image exporter.")
+                print(f"[VISUALIZER] Pygame GUI failed: {e}. Trying Tkinter...")
 
-        # Headless fallback: Export PNG images
+        # 2. Try Tkinter if requested or fallback
+        if (backend in ("auto", "tkinter")) and TKINTER_AVAILABLE and has_display:
+            try:
+                return self._run_tkinter_preview()
+            except Exception as e:
+                print(f"[VISUALIZER] Tkinter GUI failed: {e}. Falling back to headless export.")
+
+        # 3. Headless fallback: Export PNG images
         self.export_preview_images()
         return None
+
+    def _run_tkinter_preview(self) -> Optional[bool]:
+        """Interactive inspection canvas built on Tkinter."""
+        root = tk.Tk()
+        root.title("CopyCat - Visual Inspection Canvas (Tkinter)")
+        root.geometry("920x960")
+        root.configure(bg="#181a20")
+
+        self.approval_decision = None
+
+        # Top Banner
+        top_frame = tk.Frame(root, bg="#1e222d", height=45)
+        top_frame.pack(fill=tk.X)
+
+        title_lbl = tk.Label(top_frame, text="CopyCat Inspection Preview", font=("sans-serif", 13, "bold"), fg="#e6ebf5", bg="#1e222d")
+        title_lbl.pack(side=tk.LEFT, padx=16, pady=10)
+
+        page_lbl = tk.Label(top_frame, text="", font=("sans-serif", 11), fg="#50c878", bg="#1e222d")
+        page_lbl.pack(side=tk.RIGHT, padx=16, pady=10)
+
+        # Canvas
+        canvas = tk.Canvas(root, bg="#181a20", highlightthickness=0)
+        canvas.pack(fill=tk.BOTH, expand=True)
+
+        # Bottom Action & Navigation Bar
+        bot_frame = tk.Frame(root, bg="#1e222d", height=50)
+        bot_frame.pack(fill=tk.X)
+
+        def draw_canvas():
+            canvas.delete("all")
+            cur_p = self.pages[self.current_page_idx]
+            page_lbl.config(text=f"Page {self.current_page_idx + 1} of {len(self.pages)} ({cur_p.total_stroke_count} strokes)")
+
+            canv_w = canvas.winfo_width()
+            canv_h = canvas.winfo_height()
+            if canv_w < 50 or canv_h < 50:
+                return
+
+            scale_w = (canv_w - 60) / self.cfg.page_width
+            scale_h = (canv_h - 40) / self.cfg.page_height
+            scale = min(scale_w, scale_h)
+
+            paper_w = self.cfg.page_width * scale
+            paper_h = self.cfg.page_height * scale
+            paper_x = max(20.0, (canv_w - paper_w) / 2.0)
+            paper_y = 20.0
+
+            # Shadow & Paper
+            canvas.create_rectangle(paper_x + 6, paper_y + 8, paper_x + paper_w + 6, paper_y + paper_h + 8, fill="#101115", outline="")
+            canvas.create_rectangle(paper_x, paper_y, paper_x + paper_w, paper_y + paper_h, fill="#FCFAF6", outline="#D0CECA")
+
+            # 8.0 mm Ruled lines
+            y_mm = self.cfg.margin_top
+            while y_mm <= self.cfg.margin_bottom:
+                py = paper_y + y_mm * scale
+                canvas.create_line(paper_x, py, paper_x + paper_w, py, fill="#C3D7EE", width=1)
+                y_mm += self.cfg.baseline_spacing
+
+            # Left Margin line
+            margin_px = paper_x + self.cfg.margin_left * scale
+            canvas.create_line(margin_px, paper_y, margin_px, paper_y + paper_h, fill="#E15F5F", width=2)
+
+            # Top & Cutoff guides
+            top_py = paper_y + self.cfg.margin_top * scale
+            canvas.create_line(paper_x, top_py, paper_x + paper_w, top_py, fill="#A8C5E8", width=1)
+            cutoff_r = paper_x + self.cfg.margin_right * scale
+            cutoff_b = paper_y + self.cfg.margin_bottom * scale
+            canvas.create_line(cutoff_r, top_py, cutoff_r, cutoff_b, fill="#E6C8C8", dash=(3, 3))
+            canvas.create_line(margin_px, cutoff_b, cutoff_r, cutoff_b, fill="#E6C8C8", dash=(3, 3))
+
+            # Strokes
+            for stroke in cur_p.strokes:
+                if len(stroke) < 2:
+                    continue
+                coords: List[float] = []
+                for px, py in stroke:
+                    coords.append(paper_x + px * scale)
+                    coords.append(paper_y + py * scale)
+                canvas.create_line(coords, fill="#14244B", width=2, capstyle=tk.ROUND, joinstyle=tk.ROUND)
+
+        def prev_page(e=None):
+            if self.current_page_idx > 0:
+                self.current_page_idx -= 1
+                draw_canvas()
+
+        def next_page(e=None):
+            if self.current_page_idx < len(self.pages) - 1:
+                self.current_page_idx += 1
+                draw_canvas()
+
+        def approve(e=None):
+            self.approval_decision = True
+            root.destroy()
+
+        def reject(e=None):
+            self.approval_decision = False
+            root.destroy()
+
+        # Navigation buttons
+        tk.Button(bot_frame, text="◀ Prev [Left Arrow]", font=("sans-serif", 9), command=prev_page, bg="#2a2e3d", fg="#ffffff").pack(side=tk.LEFT, padx=10, pady=8)
+        tk.Button(bot_frame, text="Next [Right Arrow] ▶", font=("sans-serif", 9), command=next_page, bg="#2a2e3d", fg="#ffffff").pack(side=tk.LEFT, padx=4, pady=8)
+
+        # Approval buttons
+        tk.Button(bot_frame, text="✖ Reject [N / ESC]", font=("sans-serif", 9, "bold"), command=reject, bg="#aa3333", fg="#ffffff", padx=10).pack(side=tk.RIGHT, padx=10, pady=8)
+        tk.Button(bot_frame, text="✔ Approve Plot [Y / Enter]", font=("sans-serif", 9, "bold"), command=approve, bg="#2e8b57", fg="#ffffff", padx=12).pack(side=tk.RIGHT, padx=4, pady=8)
+
+        # Keyboard bindings
+        root.bind("<Left>", prev_page)
+        root.bind("<Right>", next_page)
+        root.bind("<y>", approve)
+        root.bind("<Y>", approve)
+        root.bind("<Return>", approve)
+        root.bind("<n>", reject)
+        root.bind("<N>", reject)
+        root.bind("<Escape>", reject)
+        canvas.bind("<Configure>", lambda e: draw_canvas())
+
+        root.mainloop()
+        return self.approval_decision
 
     def export_preview_images(self, output_dir: str = "./preview_images") -> List[str]:
         """Renders pages to PNG files when running headless or for documentation."""
@@ -264,3 +400,4 @@ class Visualizer:
 
         pygame.quit()
         return self.approval_decision
+

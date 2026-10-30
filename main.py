@@ -3,8 +3,8 @@ main.py - CopyCat: Automated Text-to-Handwriting G-Code Generator & Visual Inspe
 
 End-to-End Workflow:
 1. Load Markdown assignment (assignment.md)
-2. Synthesize organic single-stroke centerline vector trajectories
-3. Launch interactive Pygame inspection canvas (8 mm ruled lines, margins)
+2. Select from 11+ organic handwriting styles (or customize slant/jitter/tremor)
+3. Launch interactive visualizer (Pygame or Tkinter studio)
 4. Two-Step Console Approval Check: "Does this look good to plot? (Y/N)"
 5. (If Y): Compile verified GRBL G-code & Stream to Plotter over USB Serial
 6. (If N): Safely abort without sending anything to hardware.
@@ -43,6 +43,67 @@ def parse_arguments() -> argparse.Namespace:
         default="assignment.md",
         help="Path to input Markdown file (default: assignment.md)"
     )
+    # UI Mode
+    parser.add_argument(
+        "--gui", "-g",
+        action="store_true",
+        help="Launch the full interactive Tkinter GUI Studio with live canvas and sliders."
+    )
+    parser.add_argument(
+        "--ui",
+        choices=["auto", "pygame", "tkinter", "none"],
+        default="auto",
+        help="Visual inspection backend window (default: auto; tries Pygame, then Tkinter)"
+    )
+    # Handwriting Styles
+    parser.add_argument(
+        "--style", "-s",
+        choices=list(config.STYLE_PRESETS.keys()),
+        default="natural",
+        help="Handwriting variation style preset (default: natural)"
+    )
+    parser.add_argument(
+        "--list-styles",
+        action="store_true",
+        help="List all 11 available handwriting style presets with descriptions."
+    )
+    parser.add_argument(
+        "--interactive-style", "-i",
+        action="store_true",
+        help="Interactively select a handwriting style from a numbered terminal menu."
+    )
+    # Fine-Tuning Overrides
+    parser.add_argument(
+        "--slant",
+        type=float,
+        default=None,
+        help="Override forward italic slant angle in degrees (e.g. 12.0)"
+    )
+    parser.add_argument(
+        "--jitter",
+        type=float,
+        default=None,
+        help="Override baseline vertical jitter in mm (e.g. 0.35)"
+    )
+    parser.add_argument(
+        "--wobble",
+        type=float,
+        default=None,
+        help="Override micro-wobble / pen tremor displacement in mm (e.g. 0.05)"
+    )
+    parser.add_argument(
+        "--kerning",
+        type=float,
+        default=None,
+        help="Override character spacing variance in mm (e.g. 0.15)"
+    )
+    parser.add_argument(
+        "--scale",
+        type=float,
+        default=None,
+        help="Override text font scaling factor (default: ~0.34)"
+    )
+    # Machine & Motion
     parser.add_argument(
         "--port",
         default=config.DEFAULT_PORT,
@@ -66,12 +127,6 @@ def parse_arguments() -> argparse.Namespace:
         help="Stroke synthesis engine (auto, hershey, or rnn; default: auto)"
     )
     parser.add_argument(
-        "--style",
-        choices=["neat", "natural", "casual"],
-        default="natural",
-        help="Handwriting variation style preset (default: natural)"
-    )
-    parser.add_argument(
         "--output-dir",
         default="./gcode_output",
         help="Directory to save compiled .gcode files (default: ./gcode_output)"
@@ -85,7 +140,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         "--no-preview",
         action="store_true",
-        help="Skip Pygame visualizer window (for automated/batch pipelines)."
+        help="Skip visualizer window (for automated/batch pipelines)."
     )
     parser.add_argument(
         "--no-stream",
@@ -100,9 +155,63 @@ def parse_arguments() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def print_styles_catalog():
+    """Prints the formatted catalog of all available handwriting styles."""
+    print("=" * 86)
+    print("COPYCAT HANDWRITING STYLES CATALOG")
+    print("=" * 86)
+    print(f"{'Key':<12} {'Display Name':<30} {'Slant':<8} {'Jitter':<9} {'Variant':<10}")
+    print("-" * 86)
+    for key, p in config.STYLE_PRESETS.items():
+        name = p.get("name", key)
+        slant = f"{p.get('slant', 0.0):.1f}°"
+        jitter = f"±{p.get('jitter', 0.0):.2f}mm"
+        variant = p.get("font_variant", "simplex")
+        print(f"{key:<12} {name:<30} {slant:<8} {jitter:<9} {variant:<10}")
+        print(f"             ↳ {p.get('description', '')}\n")
+    print("=" * 86)
+    print("Usage: python3 main.py assignment.md --style <key>")
+    print("   or: python3 main.py assignment.md --gui (for visual live sliders)")
+
+
+def prompt_style_selection() -> str:
+    """Prompts the user to pick a handwriting style from an interactive menu."""
+    styles = list(config.STYLE_PRESETS.keys())
+    print("\nSelect a handwriting style:")
+    for idx, key in enumerate(styles, start=1):
+        p = config.STYLE_PRESETS[key]
+        print(f"  [{idx:2d}] {p['name']:<28} - {p['description']}")
+    
+    while True:
+        choice = input(f"\nEnter choice [1-{len(styles)}] (default 1): ").strip()
+        if not choice:
+            return styles[0]
+        if choice.isdigit() and 1 <= int(choice) <= len(styles):
+            selected = styles[int(choice) - 1]
+            print(f"Selected style: '{selected}' ({config.STYLE_PRESETS[selected]['name']})\n")
+            return selected
+        print("Invalid choice, please enter a valid number.")
+
+
 def main():
     print(BANNER)
     args = parse_arguments()
+
+    # Style catalog listing command
+    if args.list_styles:
+        print_styles_catalog()
+        return
+
+    # Check if Tkinter GUI Studio was requested
+    if args.gui:
+        print("[INFO] Launching CopyCat Interactive Tkinter Studio...")
+        try:
+            import ui
+            ui.launch_gui(args.input)
+            return
+        except Exception as e:
+            print(f"[GUI ERROR] Failed to launch Tkinter GUI: {e}")
+            print("[INFO] Falling back to CLI mode...")
 
     # Step 1: Check and load input file
     input_file = args.input
@@ -112,6 +221,11 @@ def main():
         create_sample_assignment(input_file)
         print(f"[INFO] Created '{input_file}'. Proceeding with pipeline...")
 
+    # Select handwriting style
+    selected_style = args.style
+    if args.interactive_style:
+        selected_style = prompt_style_selection()
+
     # Load custom configuration
     cfg = config.PlotterConfig(
         port=args.port,
@@ -120,9 +234,23 @@ def main():
     )
 
     # Step 2: Synthesize vector strokes locked to notebook ruling
+    style_info = config.STYLE_PRESETS.get(selected_style, config.STYLE_PRESETS["natural"])
     print(f"\n[1/5] Synthesizing single-stroke trajectories from '{input_file}'...")
-    print(f"      Engine: {args.engine.upper()} | Style: {args.style.upper()}")
-    layout = LayoutEngine(cfg=cfg, engine_type=args.engine)
+    print(f"      Style:   {selected_style.upper()} ({style_info['name']})")
+    print(f"      Details: {style_info['description']}")
+    if args.slant is not None or args.jitter is not None or args.wobble is not None:
+        print(f"      Custom overrides: Slant={args.slant}°, Jitter={args.jitter}mm, Wobble={args.wobble}mm")
+
+    layout = LayoutEngine(
+        cfg=cfg,
+        engine_type=args.engine,
+        style=selected_style,
+        custom_slant=args.slant,
+        custom_jitter=args.jitter,
+        custom_wobble=args.wobble,
+        custom_kerning=args.kerning,
+        custom_scale=args.scale
+    )
 
     try:
         pages = layout.parse_file(input_file)
@@ -135,12 +263,12 @@ def main():
 
     # Step 3: Interactive Visual Inspection
     gui_decision = None
-    if not args.no_preview:
-        print("\n[2/5] Launching interactive visualizer canvas...")
+    if not args.no_preview and args.ui != "none":
+        print(f"\n[2/5] Launching interactive visualizer canvas (backend: {args.ui.upper()})...")
         print("      Inspect 8.0 mm notebook ruling, margins, and centerline vector paths.")
         print("      Controls: [<- / ->] Navigate pages | [Space] Fast-forward | [Y] Approve | [N] Reject")
         vis = Visualizer(pages, cfg=cfg)
-        gui_decision = vis.show(animate=True)
+        gui_decision = vis.show(animate=True, backend=args.ui)
 
     if args.export_preview or args.no_preview:
         vis = Visualizer(pages, cfg=cfg)
@@ -151,6 +279,7 @@ def main():
     print("COPYCAT - TWO-STEP PLOT INSPECTION APPROVAL")
     print("=" * 70)
     print(f"Source Markdown:      {input_file}")
+    print(f"Handwriting Style:    {selected_style} ({style_info['name']})")
     print(f"Pages to Plot:        {len(pages)}")
     print(f"Total Strokes:        {total_strokes}")
     print(f"Ruled Spacing:        {cfg.baseline_spacing} mm")
@@ -159,7 +288,7 @@ def main():
     print(f"Simulation Mode:      {'ENABLED (--dry-run)' if args.dry_run else 'DISABLED (Physical Hardware)'}")
     print("=" * 70)
 
-    # If user pressed Y or N in the Pygame window, use that or prompt in terminal
+    # If user pressed Y or N in the GUI window, use that or prompt in terminal
     if gui_decision is True:
         print("[APPROVAL] User approved via interactive visualizer [Y].")
         approved = True
@@ -181,7 +310,7 @@ def main():
     if not approved:
         print("\n[ABORTED] Plotting cancelled by user.")
         print("          No commands were sent to the plotter.")
-        print("          You can adjust config.py, edit assignment.md, and retry.")
+        print("          Tip: Try changing the style (--style <name>) or adjust config.py.")
         sys.exit(0)
 
     # Step 5: Compile verified G-code programs

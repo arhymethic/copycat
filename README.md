@@ -300,12 +300,67 @@ MICRO_WOBBLE = 0.04         # Anti-robotic hand tremor (mm)
 
 ---
 
+## 🎨 Interactive Tkinter Studio & GUI
+
+In addition to the Pygame inspection canvas, CopyCat includes a **full desktop Tkinter Studio (`ui.py`)**:
+
+```bash
+# Launch Tkinter GUI Studio
+python3 main.py --gui
+# Or directly:
+python3 ui.py assignment.md
+```
+
+### Features of the GUI Studio:
+- **Live 8.0 mm Ruled Sheet Canvas**: Auto-renders your handwriting on simulated notebook paper with margins.
+- **Instant Style Dropdown**: Switch between all 11 handwriting styles and see the canvas update in real time.
+- **Interactive Fine-Tuning Sliders**:
+  - **Slant Angle Slider** ($-5^\circ\text{ to }+25^\circ$)
+  - **Baseline Jitter Slider** ($0.0\text{ to }0.50\text{ mm}$)
+  - **Micro-Wobble / Tremor Slider** ($0.0\text{ to }0.12\text{ mm}$)
+  - **Kerning Variance Slider** ($0.0\text{ to }0.30\text{ mm}$)
+  - **Font Scale Slider** ($0.20\text{ to }0.55$)
+- **Live Markdown Editor**: Pop open a text window, edit notes or equations, and click *Apply* to re-render.
+- **Serial Plotter Hub**: Scan available USB serial ports, toggle dry-run simulation, and stream directly with a real-time progress bar.
+
+---
+
+## 🖋️ Complete Handwriting Styles Catalog
+
+CopyCat comes with **11 built-in handwriting personalities** accessible via `--style <key>` or the GUI:
+
+| Style Key | Display Name | Slant | Jitter | Font Variant | Personality & Description |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| `natural` | **College Student** *(Default)* | $9.5^\circ$ | $\pm0.22\text{ mm}$ | `simplex` | Everyday balanced student handwriting, organic baseline drift, and subtle tremor. |
+| `neat` | **Overachiever / Neat Notebook** | $4.0^\circ$ | $\pm0.06\text{ mm}$ | `simplex` | Exceptionally tidy, upright, disciplined character height, minimal jitter. |
+| `architect` | **Draftsman / Architectural** | $0.0^\circ$ | $\pm0.04\text{ mm}$ | `architect` | Crisp technical drafting lettering, zero slant, clean geometry, uniform kerning. |
+| `rushed` | **5-Minutes-Left Exam** *(Messy)* | $16.0^\circ$ | $\pm0.38\text{ mm}$ | `simplex` | Hurried rushed exam handwriting, steep slant, loose baselines, noticeable tremor. |
+| `casual` | **Coffee Shop Notes** | $12.0^\circ$ | $\pm0.26\text{ mm}$ | `simplex` | Relaxed and friendly, slightly rounded ascenders, gentle baseline waviness. |
+| `cursive` | **Flowing Cursive / Script** | $14.5^\circ$ | $\pm0.18\text{ mm}$ | `script` | Flowing script style with looped ascenders, curved descenders, elegant slant. |
+| `compact` | **Condensed / Cheat Sheet** | $6.0^\circ$ | $\pm0.12\text{ mm}$ | `simplex` | Small, tight lettering designed to pack maximum content onto notebook lines. |
+| `childlike` | **Elementary School Round** | $1.5^\circ$ | $\pm0.30\text{ mm}$ | `simplex` | Large, bubbly, rounded letterforms with wide kerning and near-zero slant. |
+| `italic` | **Formal Calligraphic Italic** | $18.5^\circ$ | $\pm0.10\text{ mm}$ | `simplex` | Pronounced, sharp forward slant with disciplined baseline and tight kerning. |
+| `jittery` | **Tremor / Caffeine Overload** | $10.0^\circ$ | $\pm0.35\text{ mm}$ | `simplex` | Noticeable hand tremor and micro-wobble along every pen stroke. |
+| `sloppy` | **Doctor's Prescription** | $15.0^\circ$ | $\pm0.42\text{ mm}$ | `script` | Fast and erratic, fluctuating baseline drift, irregular character spacing. |
+
+To list all styles in the terminal:
+```bash
+python3 main.py --list-styles
+```
+
+---
+
 ## 💻 CLI Reference
 
 ```text
-usage: main.py [-h] [--port PORT] [--baud BAUD] [--dry-run]
-               [--engine {auto,hershey,rnn}] [--style {neat,natural,casual}]
-               [--output-dir OUTPUT_DIR] [--origin {TOP_LEFT,BOTTOM_LEFT}]
+usage: main.py [-h] [--gui] [--ui {auto,pygame,tkinter,none}]
+               [--style {natural,neat,architect,rushed,casual,cursive,compact,childlike,italic,jittery,sloppy}]
+               [--list-styles] [--interactive-style]
+               [--slant SLANT] [--jitter JITTER] [--wobble WOBBLE]
+               [--kerning KERNING] [--scale SCALE]
+               [--port PORT] [--baud BAUD] [--dry-run]
+               [--engine {auto,hershey,rnn}] [--output-dir OUTPUT_DIR]
+               [--origin {TOP_LEFT,BOTTOM_LEFT}]
                [--no-preview] [--no-stream] [--export-preview]
                [input]
 
@@ -314,46 +369,67 @@ positional arguments:
 
 options:
   -h, --help            Show this help message and exit
+  --gui, -g             Launch the interactive Tkinter GUI Studio with live sliders
+  --ui {auto,pygame,tkinter,none}
+                        Visual inspection backend (default: auto)
+  --style, -s STYLE     Handwriting style preset (default: natural)
+  --list-styles         Print all 11 handwriting styles with descriptions
+  --interactive-style, -i
+                        Interactively pick a style from a numbered menu
+  --slant SLANT         Override slant angle in degrees (e.g. 14.0)
+  --jitter JITTER       Override baseline jitter in mm (e.g. 0.35)
+  --wobble WOBBLE       Override micro-wobble / tremor in mm (e.g. 0.05)
+  --kerning KERNING     Override character spacing variance in mm (e.g. 0.15)
+  --scale SCALE         Override font scale (e.g. 0.38)
   --port PORT           GRBL serial port (default: /dev/ttyUSB0 or COM3)
   --baud BAUD           Serial baud rate (default: 115200)
   --dry-run             Simulate USB streaming without physical hardware
   --engine {auto,hershey,rnn}
                         Stroke engine: auto, hershey, or rnn (default: auto)
-  --style {neat,natural,casual}
-                        Handwriting style preset (default: natural)
   --output-dir OUTPUT_DIR
                         Directory to save compiled .gcode files (default: ./gcode_output)
   --origin {TOP_LEFT,BOTTOM_LEFT}
                         Corner jig origin alignment (default: TOP_LEFT)
-  --no-preview          Skip Pygame visualizer (for automated scripting)
+  --no-preview          Skip visualizer (for automated scripting)
   --no-stream           Export G-code only; do not stream to serial port
   --export-preview      Export high-resolution PNG inspection preview images
 ```
 
 ### Common Commands:
 
-1. **Standard Workflow (Preview + Approval + Stream)**:
+1. **Launch Interactive Tkinter Studio**:
    ```bash
-   python3 main.py assignment.md
+   python3 main.py --gui
    ```
-2. **Export G-Code Only (e.g. for Universal Gcode Sender or SD card)**:
+2. **List All Handwriting Styles**:
    ```bash
-   python3 main.py assignment.md --no-stream
+   python3 main.py --list-styles
    ```
-3. **Dry-Run Simulation**:
+3. **Pick a Style (e.g. Architect, Cursive, Rushed)**:
+   ```bash
+   python3 main.py assignment.md --style architect
+   python3 main.py assignment.md --style cursive
+   python3 main.py assignment.md --style rushed
+   ```
+4. **Interactive Style Menu in Terminal**:
+   ```bash
+   python3 main.py assignment.md -i
+   ```
+5. **Fine-Tuned Custom Handwriting**:
+   ```bash
+   python3 main.py assignment.md --style natural --slant 14.0 --jitter 0.30 --wobble 0.05
+   ```
+6. **Dry-Run Simulation**:
    ```bash
    python3 main.py assignment.md --dry-run
    ```
-4. **Neat Handwriting Style**:
+7. **Export G-Code Only**:
    ```bash
-   python3 main.py assignment.md --style neat
-   ```
-5. **Custom Port on Windows**:
-   ```bash
-   python main.py assignment.md --port COM4
+   python3 main.py assignment.md --no-stream
    ```
 
 ---
 
 ## 📄 License
 This project is licensed under the [MIT License](LICENSE).
+

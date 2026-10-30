@@ -201,3 +201,4 @@ class GcodeCompiler:
             return (y_band, x_pos)
 
         return sorted(strokes, key=stroke_key)
+

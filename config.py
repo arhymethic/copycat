@@ -63,42 +63,146 @@ GRBL_BUFFER_SIZE: int = 127       # Standard GRBL RX character ring buffer limit
 # Handwriting Organic Variations & Human Biases
 # ==============================================================================
 
+# ==============================================================================
+# Handwriting Organic Variations & Human Biases
+# ==============================================================================
+
 # Baseline Organic Behavior
-BASELINE_JITTER: float = 0.25     # High-frequency vertical jitter (±0.25 mm)
+BASELINE_JITTER: float = 0.22     # High-frequency vertical jitter (±0.22 mm)
 BASELINE_DRIFT_AMP: float = 0.20  # Low-frequency arm drift amplitude (mm)
 BASELINE_DRIFT_PERIOD: float = 65.0  # Period of arm drift across page (mm)
 
 # Slant & Italic Angle (Degrees relative to vertical, tilted forward)
-SLANT_DEGREES: float = 9.0        # Natural handwriting slant
-SLANT_VARIANCE: float = 2.0       # Per-word slant standard deviation
-KERNING_VARIANCE: float = 0.15    # Organic character spacing variance (±0.15 mm)
+SLANT_DEGREES: float = 9.5        # Natural handwriting slant
+SLANT_VARIANCE: float = 2.2       # Per-word slant standard deviation
+KERNING_VARIANCE: float = 0.14    # Organic character spacing variance (±0.14 mm)
 
 # Micro-tremor / Non-robotic Pen Wobble
 MICRO_WOBBLE: float = 0.04        # Subtle perpendicular displacement for straight lines (mm)
 PEN_HOOK_CHANCE: float = 0.15     # Chance of subtle entry/exit flourish flick
 
-# Style Presets
+# Comprehensive Library of Handwriting Presets
 STYLE_PRESETS = {
-    "neat": {
-        "jitter": 0.08,
-        "slant": 5.0,
-        "slant_var": 1.0,
-        "kerning_var": 0.06,
-        "wobble": 0.02,
-    },
     "natural": {
+        "name": "College Student (Default)",
+        "description": "Everyday balanced student handwriting with organic slant and subtle baseline drift.",
+        "font_variant": "simplex",
         "jitter": 0.22,
         "slant": 9.5,
         "slant_var": 2.2,
         "kerning_var": 0.14,
         "wobble": 0.04,
+        "scale_mult": 1.0,
+    },
+    "neat": {
+        "name": "Overachiever / Neat Notebook",
+        "description": "Exceptionally tidy, upright, disciplined character height, and minimal jitter.",
+        "font_variant": "simplex",
+        "jitter": 0.06,
+        "slant": 4.0,
+        "slant_var": 1.0,
+        "kerning_var": 0.05,
+        "wobble": 0.015,
+        "scale_mult": 1.0,
+    },
+    "architect": {
+        "name": "Draftsman / Architectural",
+        "description": "Crisp technical drafting lettering, zero slant, clean geometry, and uniform kerning.",
+        "font_variant": "architect",
+        "jitter": 0.04,
+        "slant": 0.0,
+        "slant_var": 0.5,
+        "kerning_var": 0.04,
+        "wobble": 0.01,
+        "scale_mult": 0.96,
+    },
+    "rushed": {
+        "name": "5-Minutes-Left Exam (Messy)",
+        "description": "Hurried rushed exam handwriting, steep slant, loose baselines, and noticeable tremor.",
+        "font_variant": "simplex",
+        "jitter": 0.38,
+        "slant": 16.0,
+        "slant_var": 3.5,
+        "kerning_var": 0.24,
+        "wobble": 0.065,
+        "scale_mult": 1.02,
     },
     "casual": {
-        "jitter": 0.28,
-        "slant": 13.0,
+        "name": "Coffee Shop Notes",
+        "description": "Relaxed and friendly, slightly rounded ascenders, and gentle baseline waviness.",
+        "font_variant": "simplex",
+        "jitter": 0.26,
+        "slant": 12.0,
+        "slant_var": 2.5,
+        "kerning_var": 0.18,
+        "wobble": 0.05,
+        "scale_mult": 1.0,
+    },
+    "cursive": {
+        "name": "Flowing Cursive / Script",
+        "description": "Flowing script style with looped ascenders, curved descenders, and elegant slant.",
+        "font_variant": "script",
+        "jitter": 0.18,
+        "slant": 14.5,
+        "slant_var": 1.8,
+        "kerning_var": 0.12,
+        "wobble": 0.035,
+        "scale_mult": 1.0,
+    },
+    "compact": {
+        "name": "Condensed / Cheat Sheet",
+        "description": "Small, tight lettering designed to pack maximum content onto notebook lines.",
+        "font_variant": "simplex",
+        "jitter": 0.12,
+        "slant": 6.0,
+        "slant_var": 1.2,
+        "kerning_var": 0.06,
+        "wobble": 0.025,
+        "scale_mult": 0.82,
+    },
+    "childlike": {
+        "name": "Elementary School Round",
+        "description": "Large, bubbly, rounded letterforms with wide kerning and near-zero slant.",
+        "font_variant": "simplex",
+        "jitter": 0.30,
+        "slant": 1.5,
+        "slant_var": 1.5,
+        "kerning_var": 0.25,
+        "wobble": 0.055,
+        "scale_mult": 1.12,
+    },
+    "italic": {
+        "name": "Formal Calligraphic Italic",
+        "description": "Pronounced, sharp forward slant with disciplined baseline and tight kerning.",
+        "font_variant": "simplex",
+        "jitter": 0.10,
+        "slant": 18.5,
+        "slant_var": 1.2,
+        "kerning_var": 0.08,
+        "wobble": 0.025,
+        "scale_mult": 1.0,
+    },
+    "jittery": {
+        "name": "Tremor / Caffeine Overload",
+        "description": "Noticeable hand tremor and micro-wobble along every pen stroke.",
+        "font_variant": "simplex",
+        "jitter": 0.35,
+        "slant": 10.0,
         "slant_var": 3.0,
-        "kerning_var": 0.20,
-        "wobble": 0.06,
+        "kerning_var": 0.22,
+        "wobble": 0.09,
+        "scale_mult": 1.0,
+    },
+    "sloppy": {
+        "name": "Doctor's Prescription",
+        "description": "Fast and erratic, fluctuating baseline drift, and irregular character spacing.",
+        "font_variant": "script",
+        "jitter": 0.42,
+        "slant": 15.0,
+        "slant_var": 4.5,
+        "kerning_var": 0.28,
+        "wobble": 0.07,
+        "scale_mult": 0.95,
     },
 }
 

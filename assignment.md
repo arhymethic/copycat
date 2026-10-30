@@ -16,3 +16,4 @@ Therefore, the net work done equals the net change in kinetic energy:
 Q3. Differentiate between elastic and inelastic collisions.
 Ans: In an elastic collision, both total linear momentum and total kinetic energy are strictly conserved before and after impact.
 In an inelastic collision, total linear momentum is conserved, but part of the kinetic energy is dissipated into internal thermal energy, acoustic sound waves, or permanent plastic deformation.
+

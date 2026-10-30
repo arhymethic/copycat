@@ -298,3 +298,4 @@ class GrblStreamer:
         if self.ser and self.ser.is_open:
             self.ser.close()
             self.ser = None
+

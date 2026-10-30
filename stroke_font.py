@@ -345,12 +345,124 @@ GLYPHS: Dict[str, Tuple[float, GlyphStrokes]] = {
     '|': (3.0, [[(1.5, -15.0), (1.5, 2.0)]])
 }
 
+# Alias for standard simplex font
+GLYPHS_SIMPLEX = GLYPHS
 
-def get_glyph(char: str) -> Tuple[float, GlyphStrokes]:
-    """Retrieve glyph advance width and centerline strokes. Fallback to '?' if unknown."""
-    if char in GLYPHS:
-        return GLYPHS[char]
-    return GLYPHS.get('?', (6.0, []))
+# ==============================================================================
+# Script / Cursive Font Variant (Flowing loops and curved descenders)
+# ==============================================================================
+GLYPHS_SCRIPT: Dict[str, Tuple[float, GlyphStrokes]] = {
+    'l': (4.0, [
+        [(0.5, 0.0), (2.0, -9.0), (3.0, -14.0), (2.0, -14.0), (1.2, -9.0), (1.2, -1.0), (3.2, 0.0)]
+    ]),
+    'e': (6.5, [
+        [(0.5, -1.0), (1.5, -4.5), (5.5, -4.5), (5.5, -7.0), (3.5, -8.5), (1.5, -6.5), (1.2, -3.0), (2.5, 0.0), (5.5, 0.0)]
+    ]),
+    'h': (7.5, [
+        [(0.5, 0.0), (1.5, -9.0), (2.5, -14.0), (1.8, -14.0), (1.0, -8.0), (1.0, 0.0)],
+        [(1.0, -4.5), (3.0, -8.5), (5.5, -8.5), (6.5, -5.5), (6.5, -1.0), (7.5, 0.0)]
+    ]),
+    'b': (7.5, [
+        [(0.5, 0.0), (1.8, -9.0), (2.8, -14.0), (2.0, -14.0), (1.2, -8.0), (1.2, -1.0), (3.0, 0.0), (5.8, -1.5), (6.2, -5.0), (4.5, -7.5), (1.5, -7.5), (6.5, -7.5)]
+    ]),
+    'k': (7.5, [
+        [(0.5, 0.0), (1.8, -9.0), (2.8, -14.0), (2.0, -14.0), (1.2, -8.0), (1.2, 0.0)],
+        [(6.0, -8.5), (3.0, -4.5), (4.5, -4.0), (6.5, 0.0)],
+        [(3.0, -4.5), (1.5, -3.5)]
+    ]),
+    't': (5.0, [
+        [(0.5, -4.0), (2.0, -13.0), (2.0, -1.0), (3.5, 0.0), (4.5, -0.5)],
+        [(0.5, -8.5), (3.8, -8.5)]
+    ]),
+    'y': (7.0, [
+        [(0.5, -6.0), (2.0, -8.5), (3.5, -8.5), (3.5, -2.0), (2.0, 0.0), (1.0, -2.0), (1.0, -7.5)],
+        [(3.5, -8.5), (3.5, 3.5), (2.0, 5.2), (0.5, 4.0), (2.5, 2.0), (5.5, 0.0)]
+    ]),
+    'g': (7.5, [
+        [(6.0, -6.0), (4.5, -8.5), (2.5, -8.5), (1.0, -6.5), (1.0, -2.5), (2.5, 0.0), (4.5, 0.0), (6.0, -2.0)],
+        [(6.0, -8.5), (6.0, 3.5), (4.0, 5.2), (1.5, 4.5), (3.5, 2.0), (6.8, 0.0)]
+    ]),
+    'c': (6.5, [
+        [(0.5, -1.0), (2.0, -4.0), (4.5, -8.5), (2.5, -8.5), (1.0, -6.0), (1.0, -2.5), (2.5, 0.0), (5.5, 0.0)]
+    ]),
+    'd': (7.5, [
+        [(6.0, -2.0), (4.5, 0.0), (2.5, 0.0), (1.0, -2.5), (1.0, -6.5), (2.5, -8.5), (4.5, -8.5), (6.0, -6.0)],
+        [(6.0, -14.0), (6.0, -1.0), (7.5, 0.0)]
+    ]),
+    'r': (5.5, [
+        [(0.5, 0.0), (1.5, -7.5), (2.5, -8.5), (4.5, -8.5), (5.0, -6.5)]
+    ]),
+    's': (6.5, [
+        [(0.5, 0.0), (2.5, -4.5), (4.5, -8.5), (2.5, -8.5), (1.2, -6.5), (3.5, -4.0), (5.0, -2.5), (4.5, 0.0), (2.0, 0.0), (0.8, -1.5)]
+    ]),
+    'A': (9.5, [
+        [(1.0, -3.0), (3.5, -14.0), (7.5, -14.0), (8.5, -2.0), (6.5, 0.0), (3.5, 0.0), (1.5, -3.0), (1.5, -8.0), (8.5, -8.0)]
+    ]),
+    'C': (9.5, [
+        [(7.5, -10.0), (6.0, -13.5), (3.5, -14.0), (1.5, -11.0), (1.0, -5.0), (2.5, 0.0), (6.5, 0.0), (8.5, -2.0)]
+    ]),
+    'L': (8.5, [
+        [(2.0, -14.0), (3.0, -12.0), (2.0, -4.0), (1.0, -1.0), (3.0, 0.0), (7.5, 0.0), (8.5, -1.5)]
+    ])
+}
+
+# ==============================================================================
+# Architect / Draftsman Font Variant (Clean, geometric, sharp crossbars)
+# ==============================================================================
+GLYPHS_ARCHITECT: Dict[str, Tuple[float, GlyphStrokes]] = {
+    'A': (9.5, [
+        [(0.5, 0.0), (4.75, -14.0), (9.0, 0.0)],
+        [(1.0, -5.0), (8.5, -5.0)]
+    ]),
+    'E': (8.5, [
+        [(7.5, -14.0), (1.0, -14.0), (1.0, 0.0), (8.0, 0.0)],
+        [(1.0, -7.5), (6.0, -7.5)]
+    ]),
+    'F': (8.0, [
+        [(1.0, 0.0), (1.0, -14.0), (7.5, -14.0)],
+        [(1.0, -7.5), (5.5, -7.5)]
+    ]),
+    'H': (9.5, [
+        [(1.0, -14.0), (1.0, 0.0)],
+        [(8.5, -14.0), (8.5, 0.0)],
+        [(0.5, -7.5), (9.0, -7.5)]
+    ]),
+    'M': (11.5, [
+        [(1.0, 0.0), (1.0, -14.0), (5.75, 0.0), (10.5, -14.0), (10.5, 0.0)]
+    ]),
+    'N': (9.5, [
+        [(1.0, 0.0), (1.0, -14.0), (8.5, 0.0), (8.5, -14.0)]
+    ]),
+    'R': (9.0, [
+        [(1.0, 0.0), (1.0, -14.0), (6.0, -14.0), (7.5, -12.5), (7.5, -8.5), (5.5, -7.0), (1.0, -7.0)],
+        [(4.5, -7.0), (8.5, 0.0)]
+    ]),
+    'W': (12.5, [
+        [(0.5, -14.0), (3.25, 0.0), (6.25, -9.0), (9.25, 0.0), (12.0, -14.0)]
+    ]),
+    '4': (8.5, [
+        [(6.0, 0.0), (6.0, -14.0)],
+        [(6.0, -4.5), (1.0, -4.5), (6.0, -14.0)]
+    ]),
+    '7': (8.5, [
+        [(1.0, -14.0), (8.0, -14.0), (3.0, 0.0)]
+    ])
+}
+
+
+def get_glyph(char: str, variant: str = "simplex") -> Tuple[float, GlyphStrokes]:
+    """
+    Retrieve glyph advance width and centerline strokes.
+    Checks requested font variant (script, architect, simplex) with fallback.
+    """
+    variant = (variant or "simplex").lower()
+    if variant == "script" and char in GLYPHS_SCRIPT:
+        return GLYPHS_SCRIPT[char]
+    if variant == "architect" and char in GLYPHS_ARCHITECT:
+        return GLYPHS_ARCHITECT[char]
+    if char in GLYPHS_SIMPLEX:
+        return GLYPHS_SIMPLEX[char]
+    return GLYPHS_SIMPLEX.get('?', (6.0, []))
 
 
 # ==============================================================================
@@ -427,7 +539,8 @@ def render_word_strokes(word: str,
                         jitter_max: float,
                         kerning_var: float,
                         wobble: float,
-                        arm_drift: float = 0.0) -> Tuple[GlyphStrokes, float]:
+                        arm_drift: float = 0.0,
+                        variant: str = "simplex") -> Tuple[GlyphStrokes, float]:
     """
     Renders a single word into single-stroke polylines with human variations.
     
@@ -442,7 +555,7 @@ def render_word_strokes(word: str,
     slant_rad = math.radians(word_slant_deg)
     
     for char in word:
-        advance_raw, raw_glyph_strokes = get_glyph(char)
+        advance_raw, raw_glyph_strokes = get_glyph(char, variant=variant)
         char_width_mm = advance_raw * scale
         
         # Organic per-character variations
@@ -477,10 +590,11 @@ def render_word_strokes(word: str,
     return word_strokes, total_advance
 
 
-def measure_text_width(text: str, scale: float) -> float:
+def measure_text_width(text: str, scale: float, variant: str = "simplex") -> float:
     """Computes exact un-jittered physical advance width of a string in millimeters."""
     total_w = 0.0
     for c in text:
-        adv, _ = get_glyph(c)
+        adv, _ = get_glyph(c, variant=variant)
         total_w += adv * scale
     return total_w
+

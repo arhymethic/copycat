@@ -119,5 +119,41 @@ Ans: Mechanics is the study of motion and physical forces.
             self.assertGreater(os.path.getsize(paths[0]), 1000)
 
 
+    def test_all_handwriting_styles(self):
+        """Test all 11 handwriting presets across different font variants."""
+        md = "# Style Check\nQ1. Test question?\nAns: Testing multiple styles."
+        for style_name in config.STYLE_PRESETS:
+            engine = layout_engine.LayoutEngine(cfg=self.cfg, style=style_name)
+            pages = engine.parse_markdown(md)
+            self.assertGreater(pages[0].total_stroke_count, 10, f"Failed for style: {style_name}")
+            preset = engine.get_style_preset(style_name)
+            self.assertIn("slant", preset)
+            self.assertIn("jitter", preset)
+
+    def test_custom_style_overrides(self):
+        """Test fine-tuning overrides for slant, jitter, wobble, kerning, and scale."""
+        engine = layout_engine.LayoutEngine(
+            cfg=self.cfg,
+            style="natural",
+            custom_slant=18.0,
+            custom_jitter=0.45,
+            custom_wobble=0.08,
+            custom_kerning=0.25,
+            custom_scale=0.42
+        )
+        preset = engine.get_style_preset("natural")
+        self.assertEqual(preset["slant"], 18.0)
+        self.assertEqual(preset["jitter"], 0.45)
+        self.assertEqual(preset["wobble"], 0.08)
+        self.assertEqual(preset["kerning_var"], 0.25)
+        self.assertEqual(engine.base_scale, 0.42)
+
+    def test_ui_import(self):
+        """Test that ui module is present and loads properly."""
+        import ui
+        self.assertTrue(hasattr(ui, "CopyCatStudio"))
+
+
 if __name__ == "__main__":
     unittest.main()
+

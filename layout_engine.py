@@ -42,15 +42,46 @@ class LayoutEngine:
     notebook ruled lines and page margins.
     """
 
-    def __init__(self, cfg: Optional[config.PlotterConfig] = None, engine_type: str = "auto"):
+    def __init__(self, cfg: Optional[config.PlotterConfig] = None,
+                 engine_type: str = "auto",
+                 style: str = "natural",
+                 custom_slant: Optional[float] = None,
+                 custom_jitter: Optional[float] = None,
+                 custom_wobble: Optional[float] = None,
+                 custom_kerning: Optional[float] = None,
+                 custom_scale: Optional[float] = None):
         self.cfg = cfg or config.DEFAULT_CONFIG
         self.engine_type = engine_type.lower()
+        self.style = style.lower() if style in config.STYLE_PRESETS else "natural"
+        self.custom_slant = custom_slant
+        self.custom_jitter = custom_jitter
+        self.custom_wobble = custom_wobble
+        self.custom_kerning = custom_kerning
+        self.custom_scale = custom_scale
         self.rnn_available = self._check_rnn_engine()
         
         # Scaling factor: maps glyph coordinates to physical mm
         # Default font cap-height is 14.0 units -> scaled to ~4.8 mm for 8.0 mm ruled lines
-        self.base_scale = 0.34
-        self.header_scale = 0.44
+        preset = self.get_style_preset(self.style)
+        scale_mult = preset.get("scale_mult", 1.0)
+        if self.custom_scale is not None:
+            self.base_scale = self.custom_scale
+        else:
+            self.base_scale = 0.34 * scale_mult
+        self.header_scale = self.base_scale * 1.30
+
+    def get_style_preset(self, style_key: str) -> dict:
+        """Returns the active style dictionary with any custom parameter overrides applied."""
+        base = dict(config.STYLE_PRESETS.get(style_key, config.STYLE_PRESETS.get(self.style, config.STYLE_PRESETS["natural"])))
+        if self.custom_slant is not None:
+            base["slant"] = self.custom_slant
+        if self.custom_jitter is not None:
+            base["jitter"] = self.custom_jitter
+        if self.custom_wobble is not None:
+            base["wobble"] = self.custom_wobble
+        if self.custom_kerning is not None:
+            base["kerning_var"] = self.custom_kerning
+        return base
 
     def _check_rnn_engine(self) -> bool:
         """Checks if sjvasquez/handwriting-synthesis is installed and weights exist."""
@@ -126,18 +157,18 @@ class LayoutEngine:
                              re.match(r"^(Ans:|Answer:|A:)\s*", stripped, re.IGNORECASE))
 
             if is_question:
-                style_key = "neat"
+                style_key = "neat" if self.style == "natural" else self.style
                 start_x = self.cfg.margin_left
                 cont_x = self.cfg.margin_left
                 text_to_render = stripped
             elif is_answer:
-                style_key = "natural"
+                style_key = self.style
                 start_x = self.cfg.margin_left + self.cfg.indent_width
                 cont_x = self.cfg.margin_left + self.cfg.indent_width
                 text_to_render = stripped
             else:
                 # Standard paragraph line
-                style_key = "natural"
+                style_key = self.style
                 start_x = self.cfg.margin_left
                 cont_x = self.cfg.margin_left
                 text_to_render = stripped
@@ -165,7 +196,9 @@ class LayoutEngine:
                        baseline_y: float) -> Tuple[Page, float]:
         """Renders a centered header with larger line jump and prominence."""
         scale = self.header_scale
-        text_width = stroke_font.measure_text_width(text, scale)
+        preset = self.get_style_preset(self.style)
+        variant = preset.get("font_variant", "simplex")
+        text_width = stroke_font.measure_text_width(text, scale, variant=variant)
         
         # Center between MARGIN_LEFT and MARGIN_RIGHT
         mid_x = (self.cfg.margin_left + self.cfg.margin_right) / 2.0
@@ -177,10 +210,9 @@ class LayoutEngine:
             pages.append(current_page)
             baseline_y = self.cfg.margin_top + self.cfg.baseline_spacing
 
-        preset = config.STYLE_PRESETS["neat"]
         words = text.split(" ")
         curr_x = start_x
-        space_w = stroke_font.measure_text_width(" ", scale)
+        space_w = stroke_font.measure_text_width(" ", scale, variant=variant)
 
         for word in words:
             word_strokes, adv = stroke_font.render_word_strokes(
@@ -188,10 +220,11 @@ class LayoutEngine:
                 origin_x=curr_x,
                 baseline_y=baseline_y,
                 scale=scale,
-                slant_deg=preset["slant"] - 1.0,
-                jitter_max=preset["jitter"] * 0.7,
-                kerning_var=preset["kerning_var"],
-                wobble=preset["wobble"]
+                slant_deg=max(0.0, preset["slant"] - 1.5),
+                jitter_max=preset["jitter"] * 0.6,
+                kerning_var=preset["kerning_var"] * 0.8,
+                wobble=preset["wobble"] * 0.8,
+                variant=variant
             )
             current_page.strokes.extend(word_strokes)
             curr_x += adv + space_w
@@ -211,9 +244,10 @@ class LayoutEngine:
         """
         Word-wraps and renders a paragraph across 8.0 mm baselines with pagination.
         """
-        preset = config.STYLE_PRESETS.get(style_key, config.STYLE_PRESETS["natural"])
+        preset = self.get_style_preset(style_key)
+        variant = preset.get("font_variant", "simplex")
         scale = self.base_scale
-        space_w = stroke_font.measure_text_width(" ", scale)
+        space_w = stroke_font.measure_text_width(" ", scale, variant=variant)
 
         words = text.split(" ")
         curr_x = start_x
@@ -231,7 +265,7 @@ class LayoutEngine:
             if not word:
                 continue
 
-            word_w = stroke_font.measure_text_width(word, scale)
+            word_w = stroke_font.measure_text_width(word, scale, variant=variant)
 
             # Check if word exceeds right cutoff margin
             if curr_x + word_w > self.cfg.margin_right and curr_x > start_x:
@@ -263,7 +297,8 @@ class LayoutEngine:
                 jitter_max=preset["jitter"],
                 kerning_var=preset["kerning_var"],
                 wobble=preset["wobble"],
-                arm_drift=arm_drift
+                arm_drift=arm_drift,
+                variant=variant
             )
             current_page.strokes.extend(word_strokes)
             curr_x += adv + space_w
@@ -272,3 +307,4 @@ class LayoutEngine:
         # Advance baseline for the next line
         baseline_y += self.cfg.baseline_spacing
         return current_page, baseline_y
+
