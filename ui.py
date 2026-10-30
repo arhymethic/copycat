@@ -98,6 +98,10 @@ class CopyCatStudio:
         # Coordinate HUD
         self.hud_coords_var = tk.StringVar(value="X: 0.0 mm | Y: 0.0 mm")
 
+        # Background threading state
+        self._worker_thread: Optional[threading.Thread] = None
+        self._update_pending: bool = False
+
         # Build application
         self._setup_styles()
         self._load_file_from_disk()
@@ -449,7 +453,9 @@ class CopyCatStudio:
 
         def on_change(val):
             val_lbl.config(text=f"{float(val):.2f}")
-            self.root.after_idle(self.update_pipeline)
+            if hasattr(self, "_slider_timer") and self._slider_timer:
+                self.root.after_cancel(self._slider_timer)
+            self._slider_timer = self.root.after(300, self.update_pipeline)
 
         scale = ttk.Scale(
             parent,
@@ -470,7 +476,11 @@ class CopyCatStudio:
         if key in config.STYLE_PRESETS:
             preset = config.STYLE_PRESETS[key]
             self.style_desc_var.set(preset["description"])
-            # DO NOT overwrite user sliders! Apply current parameters to the new style!
+            engine_name = preset.get("engine", "hershey")
+            style_id = preset.get("rnn_style_id", "N/A")
+            print(f"\n[STYLE] Preset selected: '{key}' ({preset.get('name', key)})")
+            print(f"        Engine: {engine_name} | Style ID: {style_id}")
+            print(f"        Active parameters: Slant={self.slant_var.get():.2f}, Jitter={self.jitter_var.get():.2f}, Scale={self.scale_var.get():.2f}")
             self.update_pipeline()
 
     def _on_reset_sliders(self):
@@ -483,11 +493,13 @@ class CopyCatStudio:
             self.wobble_var.set(preset["wobble"])
             self.kerning_var.set(preset["kerning_var"])
             self.scale_var.set(0.34 * preset.get("scale_mult", 1.0))
+            print(f"[STYLE] Reset parameters to default values for '{key}'.")
             self.update_pipeline()
 
     def _on_apply_editor(self):
         """Applies text from the embedded editor, updates state, and re-renders."""
         self.markdown_content = self.editor_txt.get("1.0", tk.END).strip()
+        print(f"\n[EDITOR] Applying changes from editor ({len(self.markdown_content.splitlines())} lines)...")
         self.update_pipeline()
 
     def _on_save_editor_to_disk(self):
@@ -497,12 +509,15 @@ class CopyCatStudio:
             with open(self.current_filepath, "w", encoding="utf-8") as f:
                 f.write(self.markdown_content)
             self.last_mtime = os.path.getmtime(self.current_filepath)
+            print(f"[DISK] Successfully saved to {self.current_filepath}")
             messagebox.showinfo("Saved", f"Successfully saved to {os.path.basename(self.current_filepath)}")
         except Exception as e:
+            print(f"[ERROR] Could not save to disk: {e}", file=sys.stderr)
             messagebox.showerror("Save Error", f"Could not write file: {e}")
 
     def _on_reload_disk(self):
         """Explicitly reloads assignment content from disk."""
+        print(f"[DISK] Reloading contents from {self.current_filepath}...")
         if self._load_file_from_disk():
             self.editor_txt.delete("1.0", tk.END)
             self.editor_txt.insert("1.0", self.markdown_content)
@@ -520,18 +535,38 @@ class CopyCatStudio:
         if path:
             self.current_filepath = os.path.abspath(path)
             self.file_label.config(text=os.path.basename(path))
+            print(f"[FILE] Opened file: {self.current_filepath}")
             self._load_file_from_disk()
             self.editor_txt.delete("1.0", tk.END)
             self.editor_txt.insert("1.0", self.markdown_content)
             self.update_pipeline()
 
     def update_pipeline(self):
-        """Synthesizes single-stroke vector trajectories and updates page view."""
+        """Dispatches vector synthesis pipeline to a background worker thread."""
         # Sync editor content if available
         if hasattr(self, "editor_txt"):
             txt_val = self.editor_txt.get("1.0", tk.END).strip()
             if txt_val:
                 self.markdown_content = txt_val
+
+        # If a worker thread is currently running, queue as pending
+        if self._worker_thread and self._worker_thread.is_alive():
+            self._update_pending = True
+            print("[PIPELINE] Generation in progress; update request queued as pending.")
+            return
+
+        self._update_pending = False
+        self.stats_label.config(text="Synthesizing...")
+        self.hud_coords_var.set("Synthesizing handwriting strokes... Please wait.")
+
+        self._worker_thread = threading.Thread(target=self._synthesis_worker, daemon=True)
+        self._worker_thread.start()
+
+    def _synthesis_worker(self):
+        """Background thread worker for non-blocking stroke synthesis."""
+        t_start = time.time()
+        filename = os.path.basename(self.current_filepath)
+        print(f"\n[PIPELINE] Starting vector synthesis for '{filename}'...")
 
         layout = layout_engine.LayoutEngine(
             cfg=self.cfg,
@@ -543,18 +578,46 @@ class CopyCatStudio:
             custom_scale=self.scale_var.get()
         )
 
-        try:
-            self.pages = layout.parse_markdown(self.markdown_content)
-        except Exception as e:
-            messagebox.showerror("Parsing Error", f"Failed to layout document: {e}")
-            return
+        def progress_cb(current: int, total: int, text: str):
+            disp = text[:24] + ("..." if len(text) > 24 else "")
+            def _update_ui_progress():
+                self.hud_coords_var.set(f"Synthesizing ({current}/{total}): \"{disp}\"")
+                self.stats_label.config(text=f"Synthesizing ({current}/{total})")
+            self.root.after(0, _update_ui_progress)
 
+        try:
+            pages = layout.parse_markdown(self.markdown_content, progress_callback=progress_cb)
+            elapsed = time.time() - t_start
+            print(f"[PIPELINE] Synthesis finished in {elapsed:.2f}s ({len(pages)} page(s)).")
+            self.root.after(0, lambda: self._on_synthesis_success(pages))
+        except Exception as e:
+            print(f"[ERROR] Synthesis failed: {e}", file=sys.stderr)
+            import traceback
+            traceback.print_exc()
+            self.root.after(0, lambda: self._on_synthesis_error(str(e)))
+
+    def _on_synthesis_success(self, pages: List[layout_engine.Page]):
+        """Main thread callback to refresh view with newly generated pages."""
+        self.pages = pages
         if self.current_page_idx >= len(self.pages):
             self.current_page_idx = max(0, len(self.pages) - 1)
 
-        # Reset animation index when document changes
         self.sim_stroke_idx = 0
         self._draw_page()
+        self.hud_coords_var.set("Ready | Drag to Pan | Scroll to Zoom")
+        print(f"[GUI] Canvas updated: Displaying Page {self.current_page_idx + 1} of {len(self.pages)}")
+
+        # Check if another update was requested while worker was running
+        if self._update_pending:
+            self._update_pending = False
+            print("[PIPELINE] Executing queued pending update...")
+            self.root.after(50, self.update_pipeline)
+
+    def _on_synthesis_error(self, err_msg: str):
+        """Main thread callback when layout parsing fails."""
+        self.stats_label.config(text="Error")
+        self.hud_coords_var.set("Error during synthesis")
+        messagebox.showerror("Parsing Error", f"Failed to layout document:\n{err_msg}")
 
     def _draw_page(self):
         """Draws realistic notebook paper, margins, and single-stroke trajectories."""

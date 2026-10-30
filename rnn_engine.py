@@ -22,8 +22,9 @@ handwriting-synthesis repository:
 import math
 import os
 import sys
+import time
 import logging
-from typing import List, Tuple, Optional, Dict
+from typing import List, Tuple, Optional, Dict, Any
 
 import numpy as np
 
@@ -86,7 +87,9 @@ class GravesNumPyModel:
     def __init__(self, weights_path: str):
         self.weights_path = weights_path
         self.loaded = False
+        self.primed_states_cache: Dict[int, Dict[str, Any]] = {}
         self._load_weights()
+        self._load_primed_states()
 
     def _load_weights(self):
         """Loads weight matrices and bias vectors directly from checkpoint binary."""
@@ -127,6 +130,36 @@ class GravesNumPyModel:
 
         self.loaded = True
 
+    def _load_primed_states(self):
+        """Loads precomputed teacher-forcing style states from disk if available."""
+        # Check bundled data/primed_states.npz first, then cloned repo styles
+        project_root = os.path.dirname(os.path.abspath(__file__))
+        bundled_path = os.path.join(project_root, "data", "primed_states.npz")
+        repo_path = os.path.join(STYLES_DIR, "primed_states.npz")
+        cache_path = bundled_path if os.path.exists(bundled_path) else repo_path
+
+        if not os.path.exists(cache_path):
+            return
+
+        try:
+            data = np.load(cache_path)
+            for style_idx in range(13):
+                prefix = f"style_{style_idx}_"
+                if f"{prefix}h1" in data:
+                    self.primed_states_cache[style_idx] = {
+                        "h1": data[f"{prefix}h1"],
+                        "c1": data[f"{prefix}c1"],
+                        "h2": data[f"{prefix}h2"],
+                        "c2": data[f"{prefix}c2"],
+                        "h3": data[f"{prefix}h3"],
+                        "c3": data[f"{prefix}c3"],
+                        "kappa": data[f"{prefix}kappa"],
+                        "w": data[f"{prefix}w"],
+                        "c_prime": str(data[f"{prefix}c_prime"]),
+                    }
+        except Exception as e:
+            logger.warning("Failed to load primed states cache: %s", e)
+
     @staticmethod
     def _lstm_cell(x: np.ndarray, c: np.ndarray, h: np.ndarray,
                    kernel: np.ndarray, bias: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
@@ -145,18 +178,14 @@ class GravesNumPyModel:
     def sample_line(self, text: str, style_id: int = 1, bias: float = 0.85) -> np.ndarray:
         """
         Synthesizes a single line of text with style-priming from IAM style.
+        Uses precomputed teacher-forcing state cache for fast generation.
         Returns array of offsets [dx, dy, eos].
         """
         if not self.loaded:
             raise RuntimeError("Graves RNN model weights are not loaded.")
 
-        # Load style priming strokes and chars
+        t_start = time.time()
         style_idx = style_id % 13
-        strokes_path = os.path.join(STYLES_DIR, f"style-{style_idx}-strokes.npy")
-        chars_path = os.path.join(STYLES_DIR, f"style-{style_idx}-chars.npy")
-
-        x_prime = np.load(strokes_path)
-        c_prime = np.load(chars_path).tobytes().decode("utf-8")
 
         # Map text to valid alphabet characters
         valid_charset = set(drawing.alphabet)
@@ -171,6 +200,70 @@ class GravesNumPyModel:
             else:
                 cleaned_text.append(" ")
         clean_line = "".join(cleaned_text)[:72]
+        if not clean_line.strip():
+            return np.zeros((0, 3), dtype=np.float32)
+
+        # 1. Retrieve or compute teacher-forcing state for this style
+        if style_idx in self.primed_states_cache:
+            ps = self.primed_states_cache[style_idx]
+            h1 = ps["h1"].copy()
+            c1 = ps["c1"].copy()
+            h2 = ps["h2"].copy()
+            c2 = ps["c2"].copy()
+            h3 = ps["h3"].copy()
+            c3 = ps["c3"].copy()
+            kappa = ps["kappa"].copy()
+            w = ps["w"].copy()
+            c_prime = ps["c_prime"]
+        else:
+            strokes_path = os.path.join(STYLES_DIR, f"style-{style_idx}-strokes.npy")
+            chars_path = os.path.join(STYLES_DIR, f"style-{style_idx}-chars.npy")
+            x_prime = np.load(strokes_path)
+            c_prime = np.load(chars_path).tobytes().decode("utf-8")
+
+            encoded_prime = drawing.encode_ascii(c_prime)
+            U_prime = len(encoded_prime)
+            c_oh_prime = np.zeros((U_prime, len(drawing.alphabet)), dtype=np.float32)
+            for u_idx, code in enumerate(encoded_prime):
+                c_oh_prime[u_idx, code] = 1.0
+            u_vec_prime = np.arange(U_prime, dtype=np.float32)
+
+            h1 = np.zeros(400, dtype=np.float32)
+            c1 = np.zeros(400, dtype=np.float32)
+            h2 = np.zeros(400, dtype=np.float32)
+            c2 = np.zeros(400, dtype=np.float32)
+            h3 = np.zeros(400, dtype=np.float32)
+            c3 = np.zeros(400, dtype=np.float32)
+            kappa = np.zeros(10, dtype=np.float32)
+            w = np.zeros(73, dtype=np.float32)
+
+            for t in range(len(x_prime)):
+                inp = x_prime[t]
+                s1_in = np.concatenate([w, inp])
+                c1, h1 = self._lstm_cell(s1_in, c1, h1, self.lstm1_w, self.lstm1_b)
+
+                att_in = np.concatenate([w, inp, h1])
+                att_p = _softplus(att_in @ self.att_w + self.att_b)
+                alpha = att_p[0:10]
+                beta = np.maximum(att_p[10:20], 0.01)
+                kappa = kappa + att_p[20:30] / 25.0
+
+                phi = np.sum(alpha[:, None] * np.exp(-((kappa[:, None] - u_vec_prime[None, :]) ** 2) / beta[:, None]), axis=0)
+                w = np.sum(phi[:, None] * c_oh_prime, axis=0)
+
+                s2_in = np.concatenate([inp, h1, w])
+                c2, h2 = self._lstm_cell(s2_in, c2, h2, self.lstm2_w, self.lstm2_b)
+
+                s3_in = np.concatenate([inp, h2, w])
+                c3, h3 = self._lstm_cell(s3_in, c3, h3, self.lstm3_w, self.lstm3_b)
+
+            self.primed_states_cache[style_idx] = {
+                "h1": h1.copy(), "c1": c1.copy(),
+                "h2": h2.copy(), "c2": c2.copy(),
+                "h3": h3.copy(), "c3": c3.copy(),
+                "kappa": kappa.copy(), "w": w.copy(),
+                "c_prime": c_prime
+            }
 
         full_text = c_prime + " " + clean_line
         encoded = drawing.encode_ascii(full_text)
@@ -181,37 +274,6 @@ class GravesNumPyModel:
         for u_idx, code in enumerate(encoded):
             c_one_hot[u_idx, code] = 1.0
         u_vec = np.arange(U, dtype=np.float32)
-
-        # Initial hidden states
-        h1 = np.zeros(400, dtype=np.float32)
-        c1 = np.zeros(400, dtype=np.float32)
-        h2 = np.zeros(400, dtype=np.float32)
-        c2 = np.zeros(400, dtype=np.float32)
-        h3 = np.zeros(400, dtype=np.float32)
-        c3 = np.zeros(400, dtype=np.float32)
-        kappa = np.zeros(10, dtype=np.float32)
-        w = np.zeros(73, dtype=np.float32)
-
-        # 1. Teacher-forcing phase: prime network with style recordings
-        for t in range(len(x_prime)):
-            inp = x_prime[t]
-            s1_in = np.concatenate([w, inp])
-            c1, h1 = self._lstm_cell(s1_in, c1, h1, self.lstm1_w, self.lstm1_b)
-
-            att_in = np.concatenate([w, inp, h1])
-            att_p = _softplus(att_in @ self.att_w + self.att_b)
-            alpha = att_p[0:10]
-            beta = np.maximum(att_p[10:20], 0.01)
-            kappa = kappa + att_p[20:30] / 25.0
-
-            phi = np.sum(alpha[:, None] * np.exp(-((kappa[:, None] - u_vec[None, :]) ** 2) / beta[:, None]), axis=0)
-            w = np.sum(phi[:, None] * c_one_hot, axis=0)
-
-            s2_in = np.concatenate([inp, h1, w])
-            c2, h2 = self._lstm_cell(s2_in, c2, h2, self.lstm2_w, self.lstm2_b)
-
-            s3_in = np.concatenate([inp, h2, w])
-            c3, h3 = self._lstm_cell(s3_in, c3, h3, self.lstm3_w, self.lstm3_b)
 
         # 2. Free-running generative phase: sample new text
         sampled: List[np.ndarray] = []
@@ -277,6 +339,8 @@ class GravesNumPyModel:
             if char_idx >= U - 1 and eos == 1.0:
                 break
 
+        elapsed = time.time() - t_start
+        print(f"      [RNN] Synthesized line in {elapsed:.2f}s ({len(sampled)} points, style={style_idx}, bias={bias:.2f})")
         return np.array(sampled)
 
 
@@ -356,8 +420,11 @@ class VasquezHandwritingEngine:
             for stroke in cached_strokes:
                 shifted = [(origin_x + pt[0], baseline_y + pt[1]) for pt in stroke]
                 offset_strokes.append(shifted)
+            preview = text[:28] + ("..." if len(text) > 28 else "")
+            print(f"      [CACHE] Using cached neural strokes for \"{preview}\"")
             return offset_strokes, width
 
+        t0 = time.time()
         # Sample raw offsets from neural model
         raw_offsets = self.neural_model.sample_line(text, style_id=style_id, bias=bias)  # type: ignore
         if len(raw_offsets) == 0:
@@ -376,6 +443,8 @@ class VasquezHandwritingEngine:
             shifted = [(origin_x + pt[0], baseline_y + pt[1]) for pt in stroke]
             offset_strokes.append(shifted)
 
+        preview = text[:28] + ("..." if len(text) > 28 else "")
+        print(f"      [SYNTH] Line \"{preview}\" mapped to paper ({len(polylines)} strokes, {time.time() - t0:.2f}s)")
         return offset_strokes, total_width
 
     def _process_offsets_to_mm(self,

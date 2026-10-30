@@ -14,8 +14,9 @@ Responsibilities:
 import math
 import os
 import re
+import time
 from dataclasses import dataclass, field
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Callable
 
 import config
 import stroke_font
@@ -102,7 +103,8 @@ class LayoutEngine:
             content = f.read()
         return self.parse_markdown(content)
 
-    def parse_markdown(self, markdown_text: str) -> List[Page]:
+    def parse_markdown(self, markdown_text: str,
+                       progress_callback: Optional[Callable[[int, int, str], None]] = None) -> List[Page]:
         """
         Parses structured Markdown and generates vector stroke trajectories.
         
@@ -113,6 +115,16 @@ class LayoutEngine:
         - Blank line: Advances by a single 8.0 mm ruled line.
         - Multi-page pagination when exceeding Bottom Margin (275 mm).
         """
+        start_time = time.time()
+        lines = markdown_text.splitlines()
+        non_blank = [l for l in lines if l.strip()]
+        total_items = max(1, len(non_blank))
+        current_item = 0
+
+        preset = self.get_style_preset(self.style)
+        engine_name = "rnn" if (self.engine_type == "rnn" or "rnn_style_id" in preset) and self._check_rnn_engine() else "hershey"
+        print(f"\n[LAYOUT] Parsing document ({len(lines)} lines, {total_items} items) using style '{self.style}' [engine: {engine_name}]...")
+
         pages: List[Page] = []
         current_page = Page(page_number=1)
         pages.append(current_page)
@@ -121,7 +133,6 @@ class LayoutEngine:
         # e.g., MARGIN_TOP (30.0) + BASELINE_SPACING (8.0) = 38.0 mm
         current_baseline_y = self.cfg.margin_top + self.cfg.baseline_spacing
 
-        lines = markdown_text.splitlines()
         i = 0
         while i < len(lines):
             raw_line = lines[i]
@@ -136,6 +147,12 @@ class LayoutEngine:
                     current_baseline_y = self.cfg.margin_top + self.cfg.baseline_spacing
                 i += 1
                 continue
+
+            current_item += 1
+            preview_txt = stripped[:36] + ("..." if len(stripped) > 36 else "")
+            print(f"[LAYOUT] ({current_item}/{total_items}) Synthesizing \"{preview_txt}\"")
+            if progress_callback:
+                progress_callback(current_item, total_items, stripped)
 
             # 2. Header line (# Header) -> Centered, larger font, double line jump
             if raw_line.startswith("#"):
@@ -188,6 +205,10 @@ class LayoutEngine:
         if len(pages) > 1 and not pages[-1].strokes:
             pages.pop()
 
+        total_strokes = sum(len(p.strokes) for p in pages)
+        total_points = sum(sum(len(s) for s in p.strokes) for p in pages)
+        elapsed = time.time() - start_time
+        print(f"[LAYOUT] Finished: {len(pages)} page(s), {total_strokes} strokes, {total_points} total points in {elapsed:.2f}s.\n")
         return pages
 
     def _render_header(self, text: str,
