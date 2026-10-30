@@ -59,6 +59,7 @@ class LayoutEngine:
         self.custom_kerning = custom_kerning
         self.custom_scale = custom_scale
         self.rnn_available = self._check_rnn_engine()
+        self.cap_height_mm = 4.8
         
         # Scaling factor: maps glyph coordinates to physical mm
         # Default font cap-height is 14.0 units -> scaled to ~4.8 mm for 8.0 mm ruled lines
@@ -84,14 +85,13 @@ class LayoutEngine:
         return base
 
     def _check_rnn_engine(self) -> bool:
-        """Checks if sjvasquez/handwriting-synthesis is installed and weights exist."""
+        """Checks if sjvasquez/handwriting-synthesis is available and neural weights are loaded."""
         if self.engine_type == "hershey":
             return False
         try:
-            # Check for Sean Vasquez's handwriting synthesis package or local submodule
-            import handwriting_synthesis  # type: ignore
-            return True
-        except ImportError:
+            import rnn_engine
+            return rnn_engine.VASQUEZ_ENGINE.is_rnn_ready()
+        except Exception:
             return False
 
     def parse_file(self, filepath: str) -> List[Page]:
@@ -195,8 +195,32 @@ class LayoutEngine:
                        pages: List[Page],
                        baseline_y: float) -> Tuple[Page, float]:
         """Renders a centered header with larger line jump and prominence."""
-        scale = self.header_scale
         preset = self.get_style_preset(self.style)
+        use_rnn = (self.engine_type == "rnn" or "rnn_style_id" in preset) and self._check_rnn_engine()
+        if use_rnn:
+            import rnn_engine
+            style_id = preset.get("rnn_style_id", 1)
+            est_width = len(text) * 3.6
+            mid_x = (self.cfg.margin_left + self.cfg.margin_right) / 2.0
+            start_x = max(self.cfg.margin_left, mid_x - est_width / 2.0)
+            if baseline_y > self.cfg.margin_bottom:
+                current_page = Page(page_number=len(pages) + 1)
+                pages.append(current_page)
+                baseline_y = self.cfg.margin_top + self.cfg.baseline_spacing
+            line_strokes, _ = rnn_engine.VASQUEZ_ENGINE.synthesize_line(
+                text=text[:70],
+                origin_x=start_x,
+                baseline_y=baseline_y,
+                style_id=style_id,
+                bias=0.95,
+                target_cap_height_mm=self.cap_height_mm * 1.3
+            )
+            current_page.strokes.extend(line_strokes)
+            current_page.line_count += 1
+            baseline_y += self.cfg.baseline_spacing * 2.0
+            return current_page, baseline_y
+
+        scale = self.header_scale
         variant = preset.get("font_variant", "simplex")
         text_width = stroke_font.measure_text_width(text, scale, variant=variant)
         
@@ -245,6 +269,57 @@ class LayoutEngine:
         Word-wraps and renders a paragraph across 8.0 mm baselines with pagination.
         """
         preset = self.get_style_preset(style_key)
+
+        # Check if neural RNN inference is available and requested
+        use_rnn = (self.engine_type == "rnn" or "rnn_style_id" in preset) and self._check_rnn_engine()
+        if use_rnn:
+            import rnn_engine
+            style_id = preset.get("rnn_style_id", 1)
+            bias = 0.85
+            words = text.split(" ")
+            line_words: List[str] = []
+            curr_line_chars = 0
+            # Target line character budget based on page margin width (max 70 chars for model)
+            avail_width_mm = self.cfg.margin_right - start_x
+            max_line_chars = min(68, max(20, int(avail_width_mm / 2.6)))
+
+            lines_to_render: List[Tuple[str, float]] = []
+            for w in words:
+                if not w:
+                    continue
+                needed = curr_line_chars + (1 if line_words else 0) + len(w)
+                if needed > max_line_chars and line_words:
+                    x_start = start_x if not lines_to_render else continuation_x
+                    lines_to_render.append((" ".join(line_words), x_start))
+                    line_words = [w]
+                    curr_line_chars = len(w)
+                else:
+                    line_words.append(w)
+                    curr_line_chars = needed
+            if line_words:
+                x_start = start_x if not lines_to_render else continuation_x
+                lines_to_render.append((" ".join(line_words), x_start))
+
+            for line_text, x_pos in lines_to_render:
+                if baseline_y > self.cfg.margin_bottom:
+                    current_page = Page(page_number=len(pages) + 1)
+                    pages.append(current_page)
+                    baseline_y = self.cfg.margin_top + self.cfg.baseline_spacing
+
+                line_strokes, _ = rnn_engine.VASQUEZ_ENGINE.synthesize_line(
+                    text=line_text,
+                    origin_x=x_pos,
+                    baseline_y=baseline_y,
+                    style_id=style_id,
+                    bias=bias,
+                    target_cap_height_mm=self.cap_height_mm
+                )
+                current_page.strokes.extend(line_strokes)
+                current_page.line_count += 1
+                baseline_y += self.cfg.baseline_spacing
+
+            return current_page, baseline_y
+
         variant = preset.get("font_variant", "simplex")
         scale = self.base_scale
         space_w = stroke_font.measure_text_width(" ", scale, variant=variant)

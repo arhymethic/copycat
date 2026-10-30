@@ -139,16 +139,23 @@ CopyCat strictly enforces a **"verify-before-send"** safety philosophy. It **nev
 
 ```
 copycat/
-├── config.py             # Machine, page dimensions, margins, and motion parameters
+├── config.py             # Machine, page dimensions, margins, and 24 handwriting styles
 ├── layout_engine.py      # Markdown parser, word-wrapper, 8 mm ruling & pagination
 ├── stroke_font.py        # Self-contained single-stroke vector engine & humanizer
-├── rnn_engine.py         # Integration adapter for sjvasquez/handwriting-synthesis
-├── visualizer.py         # Pygame inspection canvas with notebook ruled lines
+├── rnn_engine.py         # Direct bridge to sjvasquez/handwriting-synthesis
+├── visualizer.py         # Pygame & Tkinter inspection canvas with notebook ruled lines
 ├── gcode_compiler.py     # GRBL G-code compiler with nearest-neighbor path optimization
 ├── streamer.py           # USB serial streamer with multi-page corner jig pause
-├── main.py               # Main CLI orchestrator
+├── ui.py                 # Full Tkinter Studio GUI with real-time sliders and editor
+├── main.py               # Main CLI orchestrator with two-step approval check
+├── handwriting-synthesis/# Cloned official repo with checkpoints (42MB) and IAM styles
+│   ├── checkpoints/      # Pretrained model-17900 Graves LSTM weights
+│   ├── styles/           # 13 IAM real human handwriting recordings (style-0 to 12)
+│   ├── drawing.py        # Denoising, coordinate conversion, and baseline alignment
+│   └── rnn.py            # Neural network implementation
 ├── assignment.md         # Sample homework assignment in Markdown
 ├── requirements.txt      # Project dependencies
+├── tests/                # Comprehensive unit and integration test suite
 └── README.md             # Complete documentation
 ```
 
@@ -245,22 +252,24 @@ Ans: The work done by a constant force is defined as the scalar dot product of t
 
 ## 🧠 Neural Handwriting Synthesis Integration
 
-CopyCat integrates with Sean Vasquez's recurrent neural network synthesis engine:
+CopyCat integrates directly with Sean Vasquez's recurrent neural network synthesis engine:
 👉 **[https://github.com/sjvasquez/handwriting-synthesis](https://github.com/sjvasquez/handwriting-synthesis)**
 
-### Fallback Guarantee
-CopyCat ships with a **100% self-contained single-stroke Hershey vector engine**. If `handwriting-synthesis` weights are not installed, CopyCat runs immediately out-of-the-box without requiring gigabytes of checkpoints.
+The entire `sjvasquez/handwriting-synthesis` repository is **already cloned locally** inside `copycat/handwriting-synthesis`:
+- **Pre-trained Checkpoints (`checkpoints/model-17900.*`)**: 42 MB pretrained Alex Graves LSTM model weights.
+- **IAM Handwriting Style Sequences (`styles/style-{0..12}-*.npy`)**: 13 real human handwriting styles from the IAM On-Line Handwriting Database.
+- **Stroke Transformation Algorithms (`drawing.py`)**: Exact coordinate conversions (`offsets_to_coords`), linear regression baseline alignment (`align`), Savitzky-Golay denoising (`denoise`), and interpolation.
 
-### Enabling the Graves RNN Engine:
-1. Clone the `handwriting-synthesis` repository into the `copycat/` folder or install its module:
-   ```bash
-   git clone https://github.com/sjvasquez/handwriting-synthesis.git
-   ```
-2. Download pretrained model checkpoints into `checkpoints/` as described in its repository.
-3. Run CopyCat with the neural engine flag:
-   ```bash
-   python3 main.py assignment.md --engine rnn
-   ```
+### Fallback Guarantee
+CopyCat features a dual-engine architecture:
+1. **Self-Contained Single-Stroke Centerline Engine**: Runs out-of-the-box in pure Python and NumPy with zero heavy dependencies. Supports 11 handcrafted handwriting personas and all 13 IAM style configurations.
+2. **Graves RNN Neural Engine**: Runs live generative recurrent neural network inference using `demo.py`'s `Hand` class when TensorFlow 1.x is installed.
+
+To enable neural inference via TensorFlow:
+```bash
+pip install tensorflow==1.15.0  # or tensorflow-cpu
+python3 main.py assignment.md --engine rnn --style rnn-2
+```
 
 ---
 
@@ -327,8 +336,9 @@ python3 ui.py assignment.md
 
 ## 🖋️ Complete Handwriting Styles Catalog
 
-CopyCat comes with **11 built-in handwriting personalities** accessible via `--style <key>` or the GUI:
+CopyCat provides **24 handwriting styles** accessible via `--style <key>`, the numbered CLI picker (`-i`), or the Tkinter GUI Studio:
 
+### 1. Organic & Academic Personas (11 Styles)
 | Style Key | Display Name | Slant | Jitter | Font Variant | Personality & Description |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | `natural` | **College Student** *(Default)* | $9.5^\circ$ | $\pm0.22\text{ mm}$ | `simplex` | Everyday balanced student handwriting, organic baseline drift, and subtle tremor. |
@@ -342,6 +352,23 @@ CopyCat comes with **11 built-in handwriting personalities** accessible via `--s
 | `italic` | **Formal Calligraphic Italic** | $18.5^\circ$ | $\pm0.10\text{ mm}$ | `simplex` | Pronounced, sharp forward slant with disciplined baseline and tight kerning. |
 | `jittery` | **Tremor / Caffeine Overload** | $10.0^\circ$ | $\pm0.35\text{ mm}$ | `simplex` | Noticeable hand tremor and micro-wobble along every pen stroke. |
 | `sloppy` | **Doctor's Prescription** | $15.0^\circ$ | $\pm0.42\text{ mm}$ | `script` | Fast and erratic, fluctuating baseline drift, irregular character spacing. |
+
+### 2. IAM Real Human Styles from `sjvasquez/handwriting-synthesis` (13 Styles)
+| Style Key | IAM Style | Slant | Jitter | Font Variant | Description & Priming Sample |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| `rnn-0` | **IAM Style 0 (Vengeance)** | $9.0^\circ$ | $\pm0.22\text{ mm}$ | `script` | Cursive/print mix with wide character spacing. (*"thought that vengeance"*) |
+| `rnn-1` | **IAM Style 1 (Times)** | $10.5^\circ$ | $\pm0.14\text{ mm}$ | `simplex` | Neat small cursive with disciplined baselines. (*"So says the Times"*) |
+| `rnn-2` | **IAM Style 2 (Crowded)** | $14.0^\circ$ | $\pm0.28\text{ mm}$ | `script` | Fast connected cursive with continuous word loops. (*"House was crowded."*) |
+| `rnn-3` | **IAM Style 3 (Finish)** | $3.0^\circ$ | $\pm0.12\text{ mm}$ | `architect` | Sharp angular print with upright ascenders. (*"A stronger finish"*) |
+| `rnn-4` | **IAM Style 4 (Eased Away)** | $11.0^\circ$ | $\pm0.25\text{ mm}$ | `simplex` | Casual loose script with relaxed descenders. (*"now eased away"*) |
+| `rnn-5` | **IAM Style 5 (Aurelius)** | $2.0^\circ$ | $\pm0.08\text{ mm}$ | `architect` | Upright formal print with deliberate strokes. (*"Aurelius Antonius about A.D"*) |
+| `rnn-6` | **IAM Style 6 (Byron)** | $5.0^\circ$ | $\pm0.15\text{ mm}$ | `script` | Upright compact cursive with narrow kerning. (*"Byron, had said"*) |
+| `rnn-7` | **IAM Style 7 (I Do Not Know)** | $12.5^\circ$ | $\pm0.22\text{ mm}$ | `script` | Quick light cursive with delicate pen pressure. (*"I do not know of"*) |
+| `rnn-8` | **IAM Style 8 (Vicarage)** | $15.0^\circ$ | $\pm0.24\text{ mm}$ | `script` | Tall flourishing script with elongated ascenders. (*"Holmbridge Vicarage,"*) |
+| `rnn-9` | **IAM Style 9 (Two-Twenty)** | $8.0^\circ$ | $\pm0.16\text{ mm}$ | `simplex` | Disciplined rhythmic print with uniform slant. (*"two-twenty carried, for him,"*) |
+| `rnn-10` | **IAM Style 10 (Thinking)** | $16.5^\circ$ | $\pm0.26\text{ mm}$ | `script` | Forward slant script with pronounced character flow. (*"\"Just you keep thinking"*) |
+| `rnn-11` | **IAM Style 11 (Royal Family)** | $7.5^\circ$ | $\pm0.20\text{ mm}$ | `script` | Rounded school script with balanced proportions. (*"Royal family so often seems to find"*) |
+| `rnn-12` | **IAM Style 12 (Selfish)** | $11.5^\circ$ | $\pm0.27\text{ mm}$ | `simplex` | Relaxed modern handwriting with organic waviness. (*"tomorrow. How selfish of me. It"*) |
 
 To list all styles in the terminal:
 ```bash

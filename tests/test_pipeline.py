@@ -148,6 +148,29 @@ Ans: Mechanics is the study of motion and physical forces.
         self.assertEqual(preset["kerning_var"], 0.25)
         self.assertEqual(engine.base_scale, 0.42)
 
+    def test_vasquez_cloned_repo_and_iam_styles(self):
+        """Test that sjvasquez/handwriting-synthesis repo assets and drawing module are active."""
+        import rnn_engine
+        engine = rnn_engine.VASQUEZ_ENGINE
+        self.assertTrue(engine.has_repo, "handwriting-synthesis repository should be cloned locally")
+        self.assertTrue(engine.has_styles, "IAM styles folder should exist in cloned repo")
+        self.assertTrue(engine.has_checkpoints, "Pretrained checkpoints should exist in cloned repo")
+
+        # Test loading of raw IAM human handwriting strokes
+        strokes, chars = engine.load_iam_style_raw(1)
+        self.assertGreater(len(strokes), 0)
+        self.assertGreater(len(chars), 0)
+
+        # Verify drawing module integration
+        self.assertTrue(rnn_engine.DRAWING_AVAILABLE, "drawing module from cloned repo should be loaded")
+        import numpy as np
+        # Test offset processing
+        sample_offsets = strokes[:30].copy()
+        polylines, width = engine._process_offsets_to_mm(sample_offsets, 20.0, 40.0, 4.8)
+        self.assertIsInstance(polylines, list)
+        self.assertGreater(width, 0.0)
+
+
     def test_ui_import(self):
         """Test that ui module is present and loads properly."""
         import ui

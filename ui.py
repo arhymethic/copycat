@@ -503,3 +503,4 @@ def launch_gui(filepath: str = "assignment.md"):
 if __name__ == "__main__":
     initial = sys.argv[1] if len(sys.argv) > 1 else "assignment.md"
     launch_gui(initial)
+
