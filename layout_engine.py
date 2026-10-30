@@ -268,6 +268,20 @@ class LayoutEngine:
                     [(x + delta_x, y) for (x, y) in stroke]
                     for stroke in line_strokes
                 ]
+
+            # Ensure header stays safely within margin_right
+            if line_strokes:
+                max_x = max(pt[0] for stroke in line_strokes for pt in stroke)
+                if max_x > self.cfg.margin_right - 2.0:
+                    allowed_span = (self.cfg.margin_right - 2.0) - self.cfg.margin_left
+                    actual_span = max_x - self.cfg.margin_left
+                    if actual_span > 0.1:
+                        fit_ratio = allowed_span / actual_span
+                        line_strokes = [
+                            [(self.cfg.margin_left + (pt[0] - self.cfg.margin_left) * fit_ratio, pt[1]) for pt in stroke]
+                            for stroke in line_strokes
+                        ]
+
             current_page.strokes.extend(line_strokes)
             current_page.line_count += 1
             baseline_y += self.cfg.baseline_spacing * 2.0
@@ -335,31 +349,45 @@ class LayoutEngine:
             wobble = preset.get("wobble", 0.0)
             bias = 0.85
 
-            # Math formulas and equations remain intact on a single line
+            eff_char_w = 1.75 * scale_ratio * self.custom_kerning
+            eff_space_w = 2.40 * scale_ratio * self.custom_space_width
+            avail_first = max(40.0, self.cfg.margin_right - start_x - 4.0)
+            avail_cont = max(40.0, self.cfg.margin_right - continuation_x - 4.0)
+
+            lines_to_render: List[Tuple[str, float]] = []
+
+            # 1. Math formulas and equations: check if wrap on ' = ' is needed
             if any(ch in rnn_engine.MATH_SYMBOLS for ch in text):
-                lines_to_render: List[Tuple[str, float]] = [(text, start_x)]
+                est_w = len(text) * eff_char_w
+                if est_w > avail_first and " = " in text:
+                    eq_parts = text.split(" = ")
+                    lines_to_render.append((eq_parts[0] + " = " + eq_parts[1], start_x))
+                    for p in eq_parts[2:]:
+                        lines_to_render.append(("  = " + p, continuation_x))
+                else:
+                    lines_to_render.append((text, start_x))
             else:
+                # 2. Text paragraph: millimeter-budget word wrapping
                 words = text.split(" ")
                 line_words: List[str] = []
-                curr_line_chars = 0
-                # Line character budget accurately filling printable width across page
-                avail_width_mm = self.cfg.margin_right - start_x
-                char_width_est = max(1.6, 1.9 * scale_ratio)
-                max_line_chars = min(85, max(30, int(avail_width_mm / char_width_est)))
+                curr_line_w = 0.0
 
-                lines_to_render = []
                 for w in words:
                     if not w:
                         continue
-                    needed = curr_line_chars + (1 if line_words else 0) + len(w)
-                    if needed > max_line_chars and line_words:
+                    word_w = len(w) * eff_char_w
+                    avail_now = avail_first if not lines_to_render else avail_cont
+                    needed = curr_line_w + (eff_space_w if line_words else 0.0) + word_w
+
+                    if needed > avail_now and line_words:
                         x_start = start_x if not lines_to_render else continuation_x
                         lines_to_render.append((" ".join(line_words), x_start))
                         line_words = [w]
-                        curr_line_chars = len(w)
+                        curr_line_w = word_w
                     else:
                         line_words.append(w)
-                        curr_line_chars = needed
+                        curr_line_w = needed
+
                 if line_words:
                     x_start = start_x if not lines_to_render else continuation_x
                     lines_to_render.append((" ".join(line_words), x_start))
@@ -387,6 +415,20 @@ class LayoutEngine:
                     letter_spacing=self.custom_kerning,
                     space_mult=self.custom_space_width
                 )
+
+                # Absolute right margin clamp: guaranteed never to extend past margin_right
+                if line_strokes:
+                    max_x = max(pt[0] for stroke in line_strokes for pt in stroke)
+                    if max_x > self.cfg.margin_right - 2.0:
+                        allowed_span = (self.cfg.margin_right - 2.0) - x_pos
+                        actual_span = max_x - x_pos
+                        if actual_span > 0.1:
+                            fit_ratio = allowed_span / actual_span
+                            line_strokes = [
+                                [(x_pos + (pt[0] - x_pos) * fit_ratio, pt[1]) for pt in stroke]
+                                for stroke in line_strokes
+                            ]
+
                 current_page.strokes.extend(line_strokes)
                 current_page.line_count += 1
                 baseline_y += self.cfg.baseline_spacing
@@ -413,10 +455,10 @@ class LayoutEngine:
             if not word:
                 continue
 
-            word_w = stroke_font.measure_text_width(word, scale, variant=variant)
+            word_w = stroke_font.measure_text_width(word, scale, variant=variant) * self.custom_kerning
 
             # Check if word exceeds right cutoff margin
-            if curr_x + word_w > self.cfg.margin_right and curr_x > start_x:
+            if curr_x + word_w > self.cfg.margin_right - 2.0 and curr_x > start_x:
                 # Wrap to next ruled line
                 current_page.line_count += 1
                 baseline_y += self.cfg.baseline_spacing
