@@ -330,30 +330,35 @@ class LayoutEngine:
             jitter_mm = preset.get("jitter", 0.0)
             wobble = preset.get("wobble", 0.0)
             bias = 0.85
-            words = text.split(" ")
-            line_words: List[str] = []
-            curr_line_chars = 0
-            # Line character budget accurately filling printable width across page
-            avail_width_mm = self.cfg.margin_right - start_x
-            char_width_est = max(2.2, 2.75 * scale_ratio)
-            max_line_chars = min(72, max(24, int(avail_width_mm / char_width_est)))
 
-            lines_to_render: List[Tuple[str, float]] = []
-            for w in words:
-                if not w:
-                    continue
-                needed = curr_line_chars + (1 if line_words else 0) + len(w)
-                if needed > max_line_chars and line_words:
+            # Math formulas and equations remain intact on a single line
+            if any(ch in rnn_engine.MATH_SYMBOLS for ch in text):
+                lines_to_render: List[Tuple[str, float]] = [(text, start_x)]
+            else:
+                words = text.split(" ")
+                line_words: List[str] = []
+                curr_line_chars = 0
+                # Line character budget accurately filling printable width across page
+                avail_width_mm = self.cfg.margin_right - start_x
+                char_width_est = max(1.6, 1.9 * scale_ratio)
+                max_line_chars = min(85, max(30, int(avail_width_mm / char_width_est)))
+
+                lines_to_render = []
+                for w in words:
+                    if not w:
+                        continue
+                    needed = curr_line_chars + (1 if line_words else 0) + len(w)
+                    if needed > max_line_chars and line_words:
+                        x_start = start_x if not lines_to_render else continuation_x
+                        lines_to_render.append((" ".join(line_words), x_start))
+                        line_words = [w]
+                        curr_line_chars = len(w)
+                    else:
+                        line_words.append(w)
+                        curr_line_chars = needed
+                if line_words:
                     x_start = start_x if not lines_to_render else continuation_x
                     lines_to_render.append((" ".join(line_words), x_start))
-                    line_words = [w]
-                    curr_line_chars = len(w)
-                else:
-                    line_words.append(w)
-                    curr_line_chars = needed
-            if line_words:
-                x_start = start_x if not lines_to_render else continuation_x
-                lines_to_render.append((" ".join(line_words), x_start))
 
             # Concurrently prefetch any uncached lines across CPU cores
             all_texts = [txt for txt, _ in lines_to_render]

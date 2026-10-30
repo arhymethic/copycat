@@ -33,6 +33,7 @@ from typing import List, Tuple, Optional, Dict, Any
 os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
 
 import numpy as np
+import stroke_font
 
 # Type aliases
 Stroke = List[Tuple[float, float]]
@@ -273,11 +274,11 @@ class GravesNumPyModel:
                 cleaned_text.append(ch)
             elif ch.lower() in valid_charset:
                 cleaned_text.append(ch.lower())
-            elif ch == "=":
-                cleaned_text.append("-")
             else:
                 cleaned_text.append(" ")
-        clean_line = "".join(cleaned_text)[:96]
+        raw_clean = "".join(cleaned_text)[:96]
+        # Collapse multiple spaces into single space so Graves attention window never slips
+        clean_line = " ".join(raw_clean.split())
         if not clean_line.strip():
             return np.zeros((0, 3), dtype=np.float32)
 
@@ -560,6 +561,89 @@ class DiskLineCache:
             logger.debug("Disk cache put failed: %s", e)
 
 
+MATH_SYMBOLS = set("=+*/^_<>[]{}|\\$%&~")
+
+
+def render_math_equation(text: str,
+                         origin_x: float,
+                         baseline_y: float,
+                         target_cap_height_mm: float = 3.8,
+                         slant_deg: float = 0.0,
+                         jitter_mm: float = 0.0,
+                         wobble: float = 0.0) -> Tuple[List[Stroke], float]:
+    """
+    Renders mathematical equations, formulas, or expressions using single-stroke
+    vector typography, with double-bar '=' equal signs, multiplication asterisks,
+    slashes, and smart subscript/superscript placement.
+    """
+    scale = target_cap_height_mm / 14.0
+    effective_slant = slant_deg if slant_deg != 0.0 else -5.0
+    effective_jitter = max(0.04, jitter_mm)
+    effective_wobble = max(0.04, wobble)
+
+    strokes: List[Stroke] = []
+    curr_x = origin_x
+    i = 0
+    n = len(text)
+
+    while i < n:
+        ch = text[i]
+        if ch == '^':
+            # Superscript (e.g. ^2, ^x)
+            if i + 1 < n:
+                sup_ch = text[i + 1]
+                s_strokes, adv = stroke_font.render_word_strokes(
+                    sup_ch,
+                    origin_x=curr_x,
+                    baseline_y=baseline_y - 2.2 * (scale / (3.8 / 14.0)),
+                    scale=scale * 0.72,
+                    slant_deg=effective_slant,
+                    jitter_max=effective_jitter,
+                    kerning_var=0.0,
+                    wobble=effective_wobble
+                )
+                strokes.extend(s_strokes)
+                curr_x += adv
+                i += 2
+                continue
+        elif ch == '_':
+            # Subscript (e.g. _f, _i, _1)
+            if i + 1 < n:
+                sub_ch = text[i + 1]
+                s_strokes, adv = stroke_font.render_word_strokes(
+                    sub_ch,
+                    origin_x=curr_x,
+                    baseline_y=baseline_y + 1.2 * (scale / (3.8 / 14.0)),
+                    scale=scale * 0.72,
+                    slant_deg=effective_slant,
+                    jitter_max=effective_jitter,
+                    kerning_var=0.0,
+                    wobble=effective_wobble
+                )
+                strokes.extend(s_strokes)
+                curr_x += adv
+                i += 2
+                continue
+
+        # Standard glyph, operator, or space
+        s_strokes, adv = stroke_font.render_word_strokes(
+            ch,
+            origin_x=curr_x,
+            baseline_y=baseline_y,
+            scale=scale,
+            slant_deg=effective_slant,
+            jitter_max=effective_jitter,
+            kerning_var=0.0,
+            wobble=effective_wobble
+        )
+        strokes.extend(s_strokes)
+        curr_x += adv
+        i += 1
+
+    total_width = curr_x - origin_x
+    return strokes, total_width
+
+
 class VasquezHandwritingEngine:
     """
     Direct bridge to sjvasquez/handwriting-synthesis.
@@ -642,7 +726,9 @@ class VasquezHandwritingEngine:
 
     def prefetch_lines(self, texts: List[str], style_id: int = 1, bias: float = 0.85):
         """Synthesizes multiple lines in parallel across CPU cores using a ThreadPoolExecutor."""
-        uncached = [t for t in texts if not self.is_cached(t, style_id, bias)]
+        # Math formulas render procedurally; only prefetch pure text lines
+        rnn_texts = [t for t in texts if not any(ch in MATH_SYMBOLS for ch in t)]
+        uncached = [t for t in rnn_texts if not self.is_cached(t, style_id, bias)]
         if not uncached:
             return
 
@@ -685,24 +771,59 @@ class VasquezHandwritingEngine:
                         baseline_y: float,
                         style_id: int = 1,
                         bias: float = 0.85,
-                        target_cap_height_mm: float = 4.8,
+                        target_cap_height_mm: float = 3.8,
                         slant_deg: float = 0.0,
                         jitter_mm: float = 0.0,
                         wobble: float = 0.0) -> Tuple[List[Stroke], float]:
         """
-        Synthesizes a line of text using the exact handwriting-synthesis logic:
-        1. Alex Graves RNN generation with style priming (cached in memory and disk)
-        2. Applies drawing.offsets_to_coords, drawing.denoise, and drawing.align
-        3. Scales coordinates to physical millimeters locked to 8.0 mm baselines
-        4. Applies interactive fine-tuning parameters (slant, jitter, wobble).
+        Synthesizes a line of text:
+        1. Mathematical equations and expressions containing operators (=, +, *, /, ^, _)
+           are rendered via humanized single-stroke vector typography with full subscript/superscript support.
+        2. Question headers starting with capital 'Q' (e.g. Q1., Q2.) render 'Q' with vector typography
+           and the remainder via Alex Graves neural RNN.
+        3. Standard sentences and prose are synthesized with authentic Alex Graves RNN neural handwriting,
+           locked to notebook ruled baselines.
         """
-        raw_offsets = self.get_or_sample_offsets(text, style_id=style_id, bias=bias)
+        # 1. Math formulas and equations: render with vector typography
+        if any(ch in MATH_SYMBOLS for ch in text):
+            return render_math_equation(
+                text=text,
+                origin_x=origin_x,
+                baseline_y=baseline_y,
+                target_cap_height_mm=target_cap_height_mm,
+                slant_deg=slant_deg,
+                jitter_mm=jitter_mm,
+                wobble=wobble
+            )
+
+        # 2. Leading capital 'Q' in question headers (Q1., Q2., etc.)
+        prefix_strokes: List[Stroke] = []
+        eff_origin_x = origin_x
+        eff_text = text
+
+        if text.startswith("Q") and len(text) > 1 and (text[1].isdigit() or text[1] in (".", ":")):
+            scale_sym = target_cap_height_mm / 14.0
+            q_strokes, q_adv = stroke_font.render_word_strokes(
+                "Q",
+                origin_x=origin_x,
+                baseline_y=baseline_y,
+                scale=scale_sym,
+                slant_deg=slant_deg if slant_deg != 0.0 else -5.0,
+                jitter_max=max(0.04, jitter_mm),
+                kerning_var=0.0,
+                wobble=max(0.04, wobble)
+            )
+            prefix_strokes = q_strokes
+            eff_origin_x = origin_x + q_adv
+            eff_text = text[1:].lstrip()
+
+        raw_offsets = self.get_or_sample_offsets(eff_text, style_id=style_id, bias=bias)
         if len(raw_offsets) == 0:
-            return [], 0.0
+            return prefix_strokes, eff_origin_x - origin_x
 
         # Convert raw offsets to physical millimeters
         polylines, total_width = self._process_offsets_to_mm(
-            raw_offsets, origin_x=origin_x, baseline_y=baseline_y, target_cap_height_mm=target_cap_height_mm
+            raw_offsets, origin_x=eff_origin_x, baseline_y=baseline_y, target_cap_height_mm=target_cap_height_mm
         )
 
         # Apply interactive fine-tuning parameters (slant shear, micro-jitter, tremor)
@@ -710,14 +831,15 @@ class VasquezHandwritingEngine:
             polylines = transform_strokes(
                 polylines,
                 baseline_y=baseline_y,
-                origin_x=origin_x,
+                origin_x=eff_origin_x,
                 slant_deg=slant_deg,
                 scale_mult=1.0,
                 jitter_mm=jitter_mm,
                 wobble=wobble
             )
 
-        return polylines, total_width
+        all_strokes = prefix_strokes + polylines
+        return all_strokes, (eff_origin_x + total_width) - origin_x
 
     def _process_offsets_to_mm(self,
                                offsets: np.ndarray,
@@ -764,11 +886,11 @@ class VasquezHandwritingEngine:
         max_x = coords[:, 0].max()
 
         # In Graves drawing.align coordinates (with positive Y pointing down):
-        # Centerline is at y = 0.
-        # Writing baseline is consistently at y ~ +3.0 units.
-        # Nominal cap height (distance from baseline to top of capital letters) is ~8.0 units.
-        RAW_CAP_HEIGHT = 8.0
-        RAW_BASELINE_Y = 3.0
+        # Centerline regression is at y = 0.
+        # Lowercase writing baseline is at y ~ +5.0 units.
+        # Distance from baseline to cap top is ~18.0 units across all IAM styles.
+        RAW_CAP_HEIGHT = 18.0
+        RAW_BASELINE_Y = 5.0
 
         scale_y = target_cap_height_mm / RAW_CAP_HEIGHT
         # Proportional aspect ratio for natural student cursive handwriting

@@ -33,7 +33,7 @@ except ImportError:
 
 
 # Theme color palettes
-THEMES: Dict[str, Dict[str, str]] = {
+THEMES: dict[str, dict[str, str]] = {
     "dark": {
         "name": "Dark Midnight",
         "bg": "#14151f",
