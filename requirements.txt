@@ -1,0 +1,11 @@
+# CopyCat Core Dependencies
+pyserial>=3.5
+numpy>=1.20.0
+pygame>=2.5.0
+pillow>=9.0.0
+
+# Optional Dependencies for Neural Synthesis (sjvasquez/handwriting-synthesis):
+# If you wish to use the Alex Graves RNN engine, clone:
+# https://github.com/sjvasquez/handwriting-synthesis
+# and install TensorFlow:
+# tensorflow>=1.15.0
