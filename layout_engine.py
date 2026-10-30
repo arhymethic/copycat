@@ -357,7 +357,7 @@ class LayoutEngine:
             lines_to_render: List[Tuple[str, float]] = []
 
             # 1. Math formulas and equations: check if wrap on ' = ' is needed
-            if any(ch in rnn_engine.MATH_SYMBOLS for ch in text):
+            if any(ch in rnn_engine.MATH_OPERATORS for ch in text):
                 est_w = len(text) * eff_char_w
                 if est_w > avail_first and " = " in text:
                     eq_parts = text.split(" = ")
