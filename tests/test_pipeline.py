@@ -149,12 +149,12 @@ Ans: Mechanics is the study of motion and physical forces.
         self.assertEqual(engine.base_scale, 0.42)
 
     def test_vasquez_cloned_repo_and_iam_styles(self):
-        """Test that sjvasquez/handwriting-synthesis repo assets and drawing module are active."""
+        """Test that neural handwriting assets, IAM styles, and drawing module are active."""
         import rnn_engine
         engine = rnn_engine.VASQUEZ_ENGINE
-        self.assertTrue(engine.has_repo, "handwriting-synthesis repository should be cloned locally")
-        self.assertTrue(engine.has_styles, "IAM styles folder should exist in cloned repo")
-        self.assertTrue(engine.has_checkpoints, "Pretrained checkpoints should exist in cloned repo")
+        self.assertTrue(engine.has_repo, "Neural synthesis assets folder should exist")
+        self.assertTrue(engine.has_styles, "IAM styles folder should exist")
+        self.assertTrue(engine.has_checkpoints, "Pretrained weights should exist")
 
         # Test loading of raw IAM human handwriting strokes
         strokes, chars = engine.load_iam_style_raw(1)

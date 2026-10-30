@@ -33,23 +33,35 @@ Stroke = List[Tuple[float, float]]
 
 logger = logging.getLogger("copycat.rnn")
 
-# Path to the cloned handwriting-synthesis repository
-REPO_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "handwriting-synthesis")
-CHECKPOINTS_DIR = os.path.join(REPO_DIR, "checkpoints")
-STYLES_DIR = os.path.join(REPO_DIR, "styles")
-WEIGHTS_FILE = os.path.join(CHECKPOINTS_DIR, "model-17900.data-00000-of-00001")
+# Project root and asset directories
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.path.join(PROJECT_ROOT, "data")
+REPO_DIR = os.path.join(PROJECT_ROOT, "handwriting-synthesis")
 
-# Add cloned repo to Python search path
+# Weights: Prefer compressed data/weights.npz (12.8 MB), fallback to legacy checkpoint (43.5 MB)
+WEIGHTS_NPZ = os.path.join(DATA_DIR, "weights.npz")
+LEGACY_WEIGHTS = os.path.join(REPO_DIR, "checkpoints", "model-17900.data-00000-of-00001")
+WEIGHTS_FILE = WEIGHTS_NPZ if os.path.exists(WEIGHTS_NPZ) else LEGACY_WEIGHTS
+CHECKPOINTS_DIR = os.path.dirname(WEIGHTS_FILE)
+
+# Styles: Prefer data/styles, fallback to handwriting-synthesis/styles
+DATA_STYLES = os.path.join(DATA_DIR, "styles")
+REPO_STYLES = os.path.join(REPO_DIR, "styles")
+STYLES_DIR = DATA_STYLES if os.path.exists(DATA_STYLES) else REPO_STYLES
+
+# Add project root and repo to Python search path
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 if os.path.exists(REPO_DIR) and REPO_DIR not in sys.path:
     sys.path.insert(0, REPO_DIR)
 
-# Try importing drawing from cloned repository
+# Try importing drawing module (local drawing.py or from cloned repo)
 try:
     import drawing  # type: ignore
     DRAWING_AVAILABLE = True
 except Exception as e:
     DRAWING_AVAILABLE = False
-    logger.debug("Could not import drawing from handwriting-synthesis: %s", e)
+    logger.debug("Could not import drawing: %s", e)
 
 
 # Metadata for the 13 real human styles in handwriting-synthesis/styles/
@@ -92,9 +104,25 @@ class GravesNumPyModel:
         self._load_primed_states()
 
     def _load_weights(self):
-        """Loads weight matrices and bias vectors directly from checkpoint binary."""
+        """Loads weight matrices and bias vectors from compressed npz or raw binary."""
         if not os.path.exists(self.weights_path):
             logger.warning("Checkpoint weights not found at %s", self.weights_path)
+            return
+
+        if self.weights_path.endswith(".npz"):
+            data = np.load(self.weights_path)
+            self.att_b = data["att_b"]
+            self.att_w = data["att_w"]
+            self.lstm1_b = data["lstm1_b"]
+            self.lstm1_w = data["lstm1_w"]
+            self.lstm2_b = data["lstm2_b"]
+            self.lstm2_w = data["lstm2_w"]
+            self.lstm3_b = data["lstm3_b"]
+            self.lstm3_w = data["lstm3_w"]
+            self.gmm_b = data["gmm_b"]
+            self.gmm_w = data["gmm_w"]
+            self.loaded = True
+            logger.info("Loaded optimized compressed neural weights from %s", self.weights_path)
             return
 
         with open(self.weights_path, "rb") as f:
@@ -394,7 +422,7 @@ class VasquezHandwritingEngine:
         self.styles_dir = STYLES_DIR
         self.weights_file = WEIGHTS_FILE
 
-        self.has_repo = os.path.exists(self.repo_dir)
+        self.has_repo = os.path.exists(self.repo_dir) or os.path.exists(DATA_DIR)
         self.has_checkpoints = os.path.exists(self.weights_file)
         self.has_styles = os.path.exists(self.styles_dir)
 

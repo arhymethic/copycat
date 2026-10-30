@@ -63,10 +63,6 @@ GRBL_BUFFER_SIZE: int = 127       # Standard GRBL RX character ring buffer limit
 # Handwriting Organic Variations & Human Biases
 # ==============================================================================
 
-# ==============================================================================
-# Handwriting Organic Variations & Human Biases
-# ==============================================================================
-
 # Baseline Organic Behavior
 BASELINE_JITTER: float = 0.22     # High-frequency vertical jitter (±0.22 mm)
 BASELINE_DRIFT_AMP: float = 0.20  # Low-frequency arm drift amplitude (mm)
