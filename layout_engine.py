@@ -60,7 +60,7 @@ class LayoutEngine:
         self.custom_kerning = custom_kerning
         self.custom_scale = custom_scale
         self.rnn_available = self._check_rnn_engine()
-        self.cap_height_mm = 4.8
+        self.cap_height_mm = 3.8
         
         # Scaling factor: maps glyph coordinates to physical mm
         # Default font cap-height is 14.0 units -> scaled to ~4.8 mm for 8.0 mm ruled lines
@@ -133,6 +133,7 @@ class LayoutEngine:
         # e.g., MARGIN_TOP (30.0) + BASELINE_SPACING (8.0) = 38.0 mm
         current_baseline_y = self.cfg.margin_top + self.cfg.baseline_spacing
 
+        in_answer_block = False
         i = 0
         while i < len(lines):
             raw_line = lines[i]
@@ -156,6 +157,7 @@ class LayoutEngine:
 
             # 2. Header line (# Header) -> Centered, larger font, double line jump
             if raw_line.startswith("#"):
+                in_answer_block = False
                 header_text = raw_line.lstrip("#").strip()
                 # Extra spacing before header if not at page top
                 if current_baseline_y > self.cfg.margin_top + self.cfg.baseline_spacing * 2:
@@ -167,24 +169,34 @@ class LayoutEngine:
                 i += 1
                 continue
 
-            # 3. Question line (e.g. 'Q1.', 'Q2:', '1.') -> Left-aligned at margin (20 mm), neater bias
+            # 3. Question line (e.g. 'Q1.', 'Q2:', '1.') -> Left-aligned at margin (20 mm)
             is_question = bool(re.match(r"^(Q\d+[\.:\)]|\d+[\.:\)])\s*", stripped, re.IGNORECASE))
-            # 4. Indented line or 'Ans:' -> Indented by 8 mm (starts at 28 mm), natural bias
-            is_answer = bool(raw_line.startswith("    ") or raw_line.startswith("\t") or 
-                             re.match(r"^(Ans:|Answer:|A:)\s*", stripped, re.IGNORECASE))
+            is_ans_start = bool(re.match(r"^(Ans:|Answer:|A:)\s*", stripped, re.IGNORECASE))
+            is_equation = bool(raw_line.startswith("    ") or raw_line.startswith("\t"))
 
             if is_question:
+                in_answer_block = False
                 style_key = "neat" if self.style == "natural" else self.style
                 start_x = self.cfg.margin_left
                 cont_x = self.cfg.margin_left
                 text_to_render = stripped
-            elif is_answer:
+            elif is_ans_start:
+                in_answer_block = True
+                style_key = self.style
+                start_x = self.cfg.margin_left + self.cfg.indent_width
+                cont_x = self.cfg.margin_left + self.cfg.indent_width
+                text_to_render = stripped
+            elif is_equation:
+                style_key = self.style
+                start_x = self.cfg.margin_left + self.cfg.indent_width * 2.0
+                cont_x = self.cfg.margin_left + self.cfg.indent_width * 2.0
+                text_to_render = stripped
+            elif in_answer_block:
                 style_key = self.style
                 start_x = self.cfg.margin_left + self.cfg.indent_width
                 cont_x = self.cfg.margin_left + self.cfg.indent_width
                 text_to_render = stripped
             else:
-                # Standard paragraph line
                 style_key = self.style
                 start_x = self.cfg.margin_left
                 cont_x = self.cfg.margin_left
@@ -226,24 +238,32 @@ class LayoutEngine:
             slant_deg = preset.get("slant", 0.0)
             jitter_mm = preset.get("jitter", 0.0)
             wobble = preset.get("wobble", 0.0)
-            est_width = len(text) * 3.2 * scale_ratio
             mid_x = (self.cfg.margin_left + self.cfg.margin_right) / 2.0
+            est_width = len(text) * 2.8 * scale_ratio
             start_x = max(self.cfg.margin_left, mid_x - est_width / 2.0)
             if baseline_y > self.cfg.margin_bottom:
                 current_page = Page(page_number=len(pages) + 1)
                 pages.append(current_page)
                 baseline_y = self.cfg.margin_top + self.cfg.baseline_spacing
-            line_strokes, _ = rnn_engine.VASQUEZ_ENGINE.synthesize_line(
-                text=text[:72],
+            line_strokes, actual_width = rnn_engine.VASQUEZ_ENGINE.synthesize_line(
+                text=text[:90],
                 origin_x=start_x,
                 baseline_y=baseline_y,
                 style_id=style_id,
                 bias=0.90,
-                target_cap_height_mm=self.cap_height_mm * 1.25 * scale_ratio,
+                target_cap_height_mm=self.cap_height_mm * 1.15 * scale_ratio,
                 slant_deg=slant_deg,
                 jitter_mm=jitter_mm,
                 wobble=wobble
             )
+            # Precisely center between margins based on synthesized width
+            correct_x = max(self.cfg.margin_left, mid_x - actual_width / 2.0)
+            delta_x = correct_x - start_x
+            if abs(delta_x) > 0.5:
+                line_strokes = [
+                    [(x + delta_x, y) for (x, y) in stroke]
+                    for stroke in line_strokes
+                ]
             current_page.strokes.extend(line_strokes)
             current_page.line_count += 1
             baseline_y += self.cfg.baseline_spacing * 2.0
@@ -313,10 +333,10 @@ class LayoutEngine:
             words = text.split(" ")
             line_words: List[str] = []
             curr_line_chars = 0
-            # Line character budget filling printable width across page (up to model max 75 chars)
+            # Line character budget accurately filling printable width across page
             avail_width_mm = self.cfg.margin_right - start_x
-            char_width_est = max(1.6, 2.0 * scale_ratio)
-            max_line_chars = min(74, max(24, int(avail_width_mm / char_width_est)))
+            char_width_est = max(2.2, 2.75 * scale_ratio)
+            max_line_chars = min(72, max(24, int(avail_width_mm / char_width_est)))
 
             lines_to_render: List[Tuple[str, float]] = []
             for w in words:

@@ -277,7 +277,7 @@ class GravesNumPyModel:
                 cleaned_text.append("-")
             else:
                 cleaned_text.append(" ")
-        clean_line = "".join(cleaned_text)[:72]
+        clean_line = "".join(cleaned_text)[:96]
         if not clean_line.strip():
             return np.zeros((0, 3), dtype=np.float32)
 
@@ -725,16 +725,25 @@ class VasquezHandwritingEngine:
                                baseline_y: float,
                                target_cap_height_mm: float) -> Tuple[List[Stroke], float]:
         """
-        Applies the exact drawing.py pipeline from sjvasquez/handwriting-synthesis
-        and maps coordinates to physical millimeters on the notebook paper.
+        Applies drawing.py pipeline from sjvasquez/handwriting-synthesis and maps
+        coordinates to physical millimeters locked to notebook ruled baselines.
         """
         offsets = offsets.copy()
 
-        # 1. Strip priming residual drift before the first pen-up jump to the text
+        # 1. Strip priming residual flick before the first pen-up jump to the text
         eos_indices = np.where(offsets[:, 2] == 1.0)[0]
-        if len(eos_indices) > 0 and eos_indices[0] < 6:
-            # Skip the residual priming points up to and including the first eos=1.0
-            offsets = offsets[eos_indices[0] + 1:]
+        if len(eos_indices) > 0:
+            first_eos = int(eos_indices[0])
+            # Priming release stroke is typically within the first 25 points
+            # followed by a large pen-up transit jump (jump_dx > 2.0 or jump_mag > 3.0) to start text
+            if first_eos < 25:
+                if first_eos + 1 < len(offsets):
+                    jump_dx = float(offsets[first_eos + 1, 0])
+                    jump_mag = float(math.hypot(offsets[first_eos + 1, 0], offsets[first_eos + 1, 1]))
+                    if jump_dx > 2.0 or jump_mag > 3.0:
+                        offsets = offsets[first_eos + 1:]
+                else:
+                    offsets = offsets[first_eos + 1:]
 
         if len(offsets) == 0:
             return [], 0.0
@@ -751,34 +760,48 @@ class VasquezHandwritingEngine:
         # Align coordinate orientation: flip Y so positive Y is downward
         coords[:, 1] *= -1.0
 
-        # Normalization
         min_x = coords[:, 0].min()
         max_x = coords[:, 0].max()
-        min_y = coords[:, 1].min()
-        max_y = coords[:, 1].max()
 
-        raw_height = max(1e-3, max_y - min_y)
-        scale = target_cap_height_mm / raw_height
+        # In Graves drawing.align coordinates (with positive Y pointing down):
+        # Centerline is at y = 0.
+        # Writing baseline is consistently at y ~ +3.0 units.
+        # Nominal cap height (distance from baseline to top of capital letters) is ~8.0 units.
+        RAW_CAP_HEIGHT = 8.0
+        RAW_BASELINE_Y = 3.0
+
+        scale_y = target_cap_height_mm / RAW_CAP_HEIGHT
+        # Proportional aspect ratio for natural student cursive handwriting
+        scale_x = scale_y * 0.58
 
         # Convert to polylines separated by end-of-stroke (eos == 1.0)
         polylines: List[Stroke] = []
         current_stroke: Stroke = []
 
         for x, y, eos in coords:
-            # Map to page mm
-            px = origin_x + (x - min_x) * scale
-            py = baseline_y - (max_y - y) * scale
+            # Map to physical page millimeters
+            px = origin_x + (x - min_x) * scale_x
+            py = baseline_y + (y - RAW_BASELINE_Y) * scale_y
             current_stroke.append((float(px), float(py)))
 
             if eos == 1.0:
                 if len(current_stroke) >= 2:
-                    polylines.append(current_stroke)
+                    # Filter out degenerate single-point or micro-ticks (< 0.2 mm span)
+                    sx = [pt[0] for pt in current_stroke]
+                    sy = [pt[1] for pt in current_stroke]
+                    span = math.hypot(max(sx) - min(sx), max(sy) - min(sy))
+                    if span > 0.20 or len(current_stroke) >= 4:
+                        polylines.append(current_stroke)
                 current_stroke = []
 
         if current_stroke and len(current_stroke) >= 2:
-            polylines.append(current_stroke)
+            sx = [pt[0] for pt in current_stroke]
+            sy = [pt[1] for pt in current_stroke]
+            span = math.hypot(max(sx) - min(sx), max(sy) - min(sy))
+            if span > 0.20 or len(current_stroke) >= 4:
+                polylines.append(current_stroke)
 
-        total_width = (max_x - min_x) * scale
+        total_width = (max_x - min_x) * scale_x
         return polylines, total_width
 
 
