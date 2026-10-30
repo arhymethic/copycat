@@ -1,20 +1,25 @@
 """
-rnn_engine.py - Exact Integration for sjvasquez/handwriting-synthesis.
+rnn_engine.py - Exact Neural Integration for sjvasquez/handwriting-synthesis.
 
 Repository:
 https://github.com/sjvasquez/handwriting-synthesis
 
-This module integrates the exact logic and assets from the cloned
+This module integrates the exact logic and model weights from the cloned
 handwriting-synthesis repository:
-1. Neural Network Inference: Uses Alex Graves' RNN via Hand from demo.py
-   when TensorFlow is installed, restoring weights from checkpoints/model-17900.
-2. IAM Handwriting Style Sequences: Integrates the 13 human handwriting recordings
-   from styles/style-{0..12}-strokes.npy and style-{0..12}-chars.npy.
-3. Exact Stroke Processing: Integrates drawing.py algorithms (offsets_to_coords,
-   align, denoise, interpolate, and skew).
-4. Physical Scaling: Maps raw coordinate strokes to 8.0 mm notebook ruled lines.
+1. Native Neural Network Inference (Pure NumPy implementation of Alex Graves' LSTM):
+   Restores exact pre-trained model weights from checkpoints/model-17900.data-00000-of-00001
+   without requiring legacy TensorFlow 1.x installations. Runs on Python 3.9 - 3.14+!
+2. IAM Handwriting Style Sequences:
+   Integrates the 13 human handwriting recordings from styles/style-{0..12}-strokes.npy
+   and style-{0..12}-chars.npy for author style-priming.
+3. Exact Stroke Processing Pipeline:
+   Directly executes drawing.py algorithms:
+   offsets_to_coords -> denoise (Savitzky-Golay) -> align (linear regression baseline).
+4. Physical Scaling:
+   Inverts vertical coordinate space and maps normalized neural strokes to 8.0 mm notebook ruled lines.
 """
 
+import math
 import os
 import sys
 import logging
@@ -31,8 +36,9 @@ logger = logging.getLogger("copycat.rnn")
 REPO_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "handwriting-synthesis")
 CHECKPOINTS_DIR = os.path.join(REPO_DIR, "checkpoints")
 STYLES_DIR = os.path.join(REPO_DIR, "styles")
+WEIGHTS_FILE = os.path.join(CHECKPOINTS_DIR, "model-17900.data-00000-of-00001")
 
-# Add cloned repo to Python search path so its modules (drawing, rnn, etc.) are accessible
+# Add cloned repo to Python search path
 if os.path.exists(REPO_DIR) and REPO_DIR not in sys.path:
     sys.path.insert(0, REPO_DIR)
 
@@ -44,69 +50,269 @@ except Exception as e:
     DRAWING_AVAILABLE = False
     logger.debug("Could not import drawing from handwriting-synthesis: %s", e)
 
-# Try importing Hand from cloned repository (requires tensorflow)
-TF_AVAILABLE = False
-HAND_CLASS = None
-try:
-    import tensorflow as tf  # type: ignore
-    from demo import Hand  # type: ignore
-    TF_AVAILABLE = True
-    HAND_CLASS = Hand
-except Exception as e:
-    TF_AVAILABLE = False
-    logger.debug("TensorFlow/Hand could not be loaded: %s", e)
-
 
 # Metadata for the 13 real human styles in handwriting-synthesis/styles/
 IAM_STYLE_METADATA: Dict[int, Dict[str, str]] = {
     0: {"name": "IAM Style 0", "sample": "thought that vengeance", "desc": "Cursive/print mix with wide character spacing."},
     1: {"name": "IAM Style 1", "sample": "So says the Times", "desc": "Neat small cursive with disciplined baselines."},
-    2: {"name": "IAM Style 2", "sample": "House was crowded.", "desc": "Fast connected cursive with continuous word loops."},
+    2: {"name": "IAM Style 2", "sample": "House was crowded.", "desc": "Fast connected cursive with continuous word loops and steep slant."},
     3: {"name": "IAM Style 3", "sample": "A stronger finish", "desc": "Sharp angular print with upright ascenders."},
     4: {"name": "IAM Style 4", "sample": "now eased away", "desc": "Casual loose script with relaxed descenders."},
     5: {"name": "IAM Style 5", "sample": "Aurelius Antonius about A.D", "desc": "Upright formal print with deliberate strokes."},
     6: {"name": "IAM Style 6", "sample": "Byron, had said", "desc": "Upright compact cursive with narrow kerning."},
-    7: {"name": "IAM Style 7", "sample": "I do not know of", "desc": "Quick light cursive with delicate pen pressure."},
+    7: {"name": "IAM Style 7", "sample": "I do not know of", "desc": "Quick light cursive with broad letterforms."},
     8: {"name": "IAM Style 8", "sample": "Holmbridge Vicarage,", "desc": "Tall flourishing script with elongated ascenders."},
-    9: {"name": "IAM Style 9", "sample": "two-twenty carried, for him,", "desc": "Disciplined rhythmic print with uniform slant."},
+    9: {"name": "IAM Style 9", "sample": "two-twenty carried, for him,", "desc": "Disciplined compact rhythmic print with uniform slant."},
     10: {"name": "IAM Style 10", "sample": "\"Just you keep thinking", "desc": "Forward slant script with pronounced character flow."},
-    11: {"name": "IAM Style 11", "sample": "Royal family so often seems to find", "desc": "Rounded school script with balanced proportions."},
+    11: {"name": "IAM Style 11", "sample": "Royal family so often seems to find", "desc": "School script with tall ascenders and steep slant."},
     12: {"name": "IAM Style 12", "sample": "tomorrow. How selfish of me. It", "desc": "Relaxed modern handwriting with organic waviness."}
 }
+
+
+def _sigmoid(x: np.ndarray) -> np.ndarray:
+    return 1.0 / (1.0 + np.exp(-np.clip(x, -20.0, 20.0)))
+
+
+def _softplus(x: np.ndarray) -> np.ndarray:
+    return np.log1p(np.exp(np.clip(x, -20.0, 20.0)))
+
+
+class GravesNumPyModel:
+    """
+    Pure NumPy implementation of Alex Graves' recurrent neural network handwriting synthesis model.
+    Loads exact weights from model-17900 without requiring TensorFlow 1.x!
+    """
+
+    def __init__(self, weights_path: str):
+        self.weights_path = weights_path
+        self.loaded = False
+        self._load_weights()
+
+    def _load_weights(self):
+        """Loads weight matrices and bias vectors directly from checkpoint binary."""
+        if not os.path.exists(self.weights_path):
+            logger.warning("Checkpoint weights not found at %s", self.weights_path)
+            return
+
+        with open(self.weights_path, "rb") as f:
+            # Attention layer
+            f.seek(12)
+            self.att_b = np.frombuffer(f.read(120), dtype=np.float32)
+            f.seek(372)
+            self.att_w = np.frombuffer(f.read(57120), dtype=np.float32).reshape(476, 30)
+
+            # LSTM 1
+            f.seek(171732)
+            self.lstm1_b = np.frombuffer(f.read(6400), dtype=np.float32)
+            f.seek(190932)
+            self.lstm1_w = np.frombuffer(f.read(3046400), dtype=np.float32).reshape(476, 1600)
+
+            # LSTM 2
+            f.seek(9330132)
+            self.lstm2_b = np.frombuffer(f.read(6400), dtype=np.float32)
+            f.seek(9349332)
+            self.lstm2_w = np.frombuffer(f.read(5606400), dtype=np.float32).reshape(876, 1600)
+
+            # LSTM 3
+            f.seek(26168532)
+            self.lstm3_b = np.frombuffer(f.read(6400), dtype=np.float32)
+            f.seek(26187732)
+            self.lstm3_w = np.frombuffer(f.read(5606400), dtype=np.float32).reshape(876, 1600)
+
+            # GMM output layer
+            f.seek(43006932)
+            self.gmm_b = np.frombuffer(f.read(484), dtype=np.float32)
+            f.seek(43008384)
+            self.gmm_w = np.frombuffer(f.read(193600), dtype=np.float32).reshape(400, 121)
+
+        self.loaded = True
+
+    @staticmethod
+    def _lstm_cell(x: np.ndarray, c: np.ndarray, h: np.ndarray,
+                   kernel: np.ndarray, bias: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        """TF-equivalent LSTM cell forward step."""
+        inp = np.concatenate([x, h])
+        gates = inp @ kernel + bias
+        # Gate order: i, j, f, o
+        i_g = _sigmoid(gates[0:400])
+        j_g = np.tanh(gates[400:800])
+        f_g = _sigmoid(gates[800:1200] + 1.0)
+        o_g = _sigmoid(gates[1200:1600])
+        c_new = c * f_g + i_g * j_g
+        h_new = np.tanh(c_new) * o_g
+        return c_new, h_new
+
+    def sample_line(self, text: str, style_id: int = 1, bias: float = 0.85) -> np.ndarray:
+        """
+        Synthesizes a single line of text with style-priming from IAM style.
+        Returns array of offsets [dx, dy, eos].
+        """
+        if not self.loaded:
+            raise RuntimeError("Graves RNN model weights are not loaded.")
+
+        # Load style priming strokes and chars
+        style_idx = style_id % 13
+        strokes_path = os.path.join(STYLES_DIR, f"style-{style_idx}-strokes.npy")
+        chars_path = os.path.join(STYLES_DIR, f"style-{style_idx}-chars.npy")
+
+        x_prime = np.load(strokes_path)
+        c_prime = np.load(chars_path).tobytes().decode("utf-8")
+
+        # Map text to valid alphabet characters
+        valid_charset = set(drawing.alphabet)
+        cleaned_text = []
+        for ch in text:
+            if ch in valid_charset:
+                cleaned_text.append(ch)
+            elif ch.lower() in valid_charset:
+                cleaned_text.append(ch.lower())
+            elif ch == "=":
+                cleaned_text.append("-")
+            else:
+                cleaned_text.append(" ")
+        clean_line = "".join(cleaned_text)[:72]
+
+        full_text = c_prime + " " + clean_line
+        encoded = drawing.encode_ascii(full_text)
+        U = len(encoded)
+
+        # One-hot encoding for characters
+        c_one_hot = np.zeros((U, len(drawing.alphabet)), dtype=np.float32)
+        for u_idx, code in enumerate(encoded):
+            c_one_hot[u_idx, code] = 1.0
+        u_vec = np.arange(U, dtype=np.float32)
+
+        # Initial hidden states
+        h1 = np.zeros(400, dtype=np.float32)
+        c1 = np.zeros(400, dtype=np.float32)
+        h2 = np.zeros(400, dtype=np.float32)
+        c2 = np.zeros(400, dtype=np.float32)
+        h3 = np.zeros(400, dtype=np.float32)
+        c3 = np.zeros(400, dtype=np.float32)
+        kappa = np.zeros(10, dtype=np.float32)
+        w = np.zeros(73, dtype=np.float32)
+
+        # 1. Teacher-forcing phase: prime network with style recordings
+        for t in range(len(x_prime)):
+            inp = x_prime[t]
+            s1_in = np.concatenate([w, inp])
+            c1, h1 = self._lstm_cell(s1_in, c1, h1, self.lstm1_w, self.lstm1_b)
+
+            att_in = np.concatenate([w, inp, h1])
+            att_p = _softplus(att_in @ self.att_w + self.att_b)
+            alpha = att_p[0:10]
+            beta = np.maximum(att_p[10:20], 0.01)
+            kappa = kappa + att_p[20:30] / 25.0
+
+            phi = np.sum(alpha[:, None] * np.exp(-((kappa[:, None] - u_vec[None, :]) ** 2) / beta[:, None]), axis=0)
+            w = np.sum(phi[:, None] * c_one_hot, axis=0)
+
+            s2_in = np.concatenate([inp, h1, w])
+            c2, h2 = self._lstm_cell(s2_in, c2, h2, self.lstm2_w, self.lstm2_b)
+
+            s3_in = np.concatenate([inp, h2, w])
+            c3, h3 = self._lstm_cell(s3_in, c3, h3, self.lstm3_w, self.lstm3_b)
+
+        # 2. Free-running generative phase: sample new text
+        sampled: List[np.ndarray] = []
+        curr_inp = np.array([0.0, 0.0, 0.0], dtype=np.float32)
+        max_steps = 38 * len(clean_line)
+
+        for _ in range(max_steps):
+            s1_in = np.concatenate([w, curr_inp])
+            c1, h1 = self._lstm_cell(s1_in, c1, h1, self.lstm1_w, self.lstm1_b)
+
+            att_in = np.concatenate([w, curr_inp, h1])
+            att_p = _softplus(att_in @ self.att_w + self.att_b)
+            alpha = att_p[0:10]
+            beta = np.maximum(att_p[10:20], 0.01)
+            kappa = kappa + att_p[20:30] / 25.0
+
+            phi = np.sum(alpha[:, None] * np.exp(-((kappa[:, None] - u_vec[None, :]) ** 2) / beta[:, None]), axis=0)
+            w = np.sum(phi[:, None] * c_one_hot, axis=0)
+
+            s2_in = np.concatenate([curr_inp, h1, w])
+            c2, h2 = self._lstm_cell(s2_in, c2, h2, self.lstm2_w, self.lstm2_b)
+
+            s3_in = np.concatenate([curr_inp, h2, w])
+            c3, h3 = self._lstm_cell(s3_in, c3, h3, self.lstm3_w, self.lstm3_b)
+
+            # GMM parameters
+            gmm_p = h3 @ self.gmm_w + self.gmm_b
+            pis = gmm_p[0:20] * (1.0 + bias)
+            sigmas = gmm_p[20:60] - bias
+            rhos = gmm_p[60:80]
+            mus = gmm_p[80:120]
+            e = gmm_p[120]
+
+            # Softmax for mixture weights
+            exp_pis = np.exp(pis - np.max(pis))
+            pis = exp_pis / np.sum(exp_pis)
+            pis = np.where(pis < 0.01, 0.0, pis)
+            pis = pis / np.sum(pis)
+
+            sigmas = np.clip(np.exp(sigmas), 1e-4, 1e5)
+            sigma1 = sigmas[0:20]
+            sigma2 = sigmas[20:40]
+            rhos = np.clip(np.tanh(rhos), -0.99999, 0.99999)
+            mu1 = mus[0:20]
+            mu2 = mus[20:40]
+
+            eos_prob = np.clip(_sigmoid(e), 1e-8, 1.0 - 1e-8)
+            eos_prob = 0.0 if eos_prob < 0.01 else eos_prob
+
+            # Sample component
+            k = np.random.choice(20, p=pis)
+            mean = [mu1[k], mu2[k]]
+            cov = [[sigma1[k] ** 2, rhos[k] * sigma1[k] * sigma2[k]],
+                   [rhos[k] * sigma1[k] * sigma2[k], sigma2[k] ** 2]]
+            dx, dy = np.random.multivariate_normal(mean, cov)
+            eos = 1.0 if np.random.rand() < eos_prob else 0.0
+
+            curr_inp = np.array([dx, dy, eos], dtype=np.float32)
+            sampled.append(curr_inp)
+
+            # Check termination
+            char_idx = np.argmax(phi)
+            if char_idx >= U - 1 and eos == 1.0:
+                break
+
+        return np.array(sampled)
 
 
 class VasquezHandwritingEngine:
     """
     Direct bridge to sjvasquez/handwriting-synthesis.
+    Provides fast, authentic Graves LSTM handwriting inference with caching.
     """
 
     def __init__(self):
         self.repo_dir = REPO_DIR
         self.checkpoints_dir = CHECKPOINTS_DIR
         self.styles_dir = STYLES_DIR
-        self.has_repo = os.path.exists(self.repo_dir)
-        self.has_checkpoints = os.path.exists(os.path.join(CHECKPOINTS_DIR, "checkpoint"))
-        self.has_styles = os.path.exists(self.styles_dir)
-        self.hand_instance = None
-        self._init_hand()
+        self.weights_file = WEIGHTS_FILE
 
-    def _init_hand(self):
-        """Initializes Hand() from demo.py if TensorFlow is present."""
-        if TF_AVAILABLE and HAND_CLASS is not None and self.has_checkpoints:
+        self.has_repo = os.path.exists(self.repo_dir)
+        self.has_checkpoints = os.path.exists(self.weights_file)
+        self.has_styles = os.path.exists(self.styles_dir)
+
+        self.neural_model: Optional[GravesNumPyModel] = None
+        self._line_cache: Dict[Tuple[str, int, float], Tuple[List[Stroke], float]] = {}
+        self._init_model()
+
+    def _init_model(self):
+        """Initializes the pure NumPy Graves LSTM model from pre-trained weights."""
+        if self.has_checkpoints:
             try:
-                # Save working directory and switch into repo dir so relative paths in Hand work
-                cur_dir = os.getcwd()
-                os.chdir(self.repo_dir)
-                self.hand_instance = HAND_CLASS()
-                os.chdir(cur_dir)
-                logger.info("Loaded Graves RNN model from checkpoints/model-17900.")
+                self.neural_model = GravesNumPyModel(self.weights_file)
+                logger.info("Loaded Graves RNN model weights into pure NumPy engine.")
             except Exception as e:
-                logger.warning("Could not initialize Hand model: %s", e)
-                self.hand_instance = None
+                logger.warning("Could not initialize NumPy neural model: %s", e)
+                self.neural_model = None
 
     def is_rnn_ready(self) -> bool:
-        """Returns True if TensorFlow and the Graves RNN model weights are loaded."""
-        return self.hand_instance is not None
+        """Returns True if the Graves RNN weights are loaded and ready to infer."""
+        return self.neural_model is not None and self.neural_model.loaded
 
     def get_style_info(self, style_id: int) -> Dict[str, str]:
         """Returns description and priming text for a style (0-12)."""
@@ -133,40 +339,44 @@ class VasquezHandwritingEngine:
                         target_cap_height_mm: float = 4.8) -> Tuple[List[Stroke], float]:
         """
         Synthesizes a line of text using the exact handwriting-synthesis logic:
-        1. Neural sampling using Hand (if TF is available)
+        1. Alex Graves RNN generation with style priming
         2. Applies drawing.offsets_to_coords, drawing.denoise, and drawing.align
         3. Scales coordinates to physical millimeters locked to 8.0 mm baselines.
         """
         if not self.is_rnn_ready():
             raise RuntimeError(
-                f"TensorFlow is required to run neural RNN synthesis with sjvasquez/handwriting-synthesis.\n"
-                f"Cloned repository is present at: {self.repo_dir}\n"
-                f"Checkpoints (42 MB) are present at: {self.checkpoints_dir}\n"
-                f"To enable neural inference, install TensorFlow in your environment:\n"
-                f"    pip install tensorflow==1.15.0  (or tensorflow-cpu)\n"
+                f"Graves RNN model weights are missing or not loaded from {self.weights_file}."
             )
 
-        # Truncate text to 75 characters max as required by the model
-        text_line = text[:74]
+        cache_key = (text.strip(), style_id % 13, round(bias, 2))
+        if cache_key in self._line_cache:
+            cached_strokes, width = self._line_cache[cache_key]
+            # Offset to target position
+            offset_strokes = []
+            for stroke in cached_strokes:
+                shifted = [(origin_x + pt[0], baseline_y + pt[1]) for pt in stroke]
+                offset_strokes.append(shifted)
+            return offset_strokes, width
 
-        # Switch to repo dir for style loading inside Hand
-        cur_dir = os.getcwd()
-        try:
-            os.chdir(self.repo_dir)
-            # Sample strokes: returns list of numpy arrays of [dx, dy, eos]
-            raw_samples = self.hand_instance._sample(
-                lines=[text_line],
-                biases=[bias],
-                styles=[style_id % 13]
-            )
-        finally:
-            os.chdir(cur_dir)
-
-        if not raw_samples or len(raw_samples[0]) == 0:
+        # Sample raw offsets from neural model
+        raw_offsets = self.neural_model.sample_line(text, style_id=style_id, bias=bias)  # type: ignore
+        if len(raw_offsets) == 0:
             return [], 0.0
 
-        offsets = raw_samples[0].copy()
-        return self._process_offsets_to_mm(offsets, origin_x, baseline_y, target_cap_height_mm)
+        polylines, total_width = self._process_offsets_to_mm(
+            raw_offsets, origin_x=0.0, baseline_y=0.0, target_cap_height_mm=target_cap_height_mm
+        )
+
+        # Cache normalized line
+        self._line_cache[cache_key] = (polylines, total_width)
+
+        # Shift to current origin
+        offset_strokes = []
+        for stroke in polylines:
+            shifted = [(origin_x + pt[0], baseline_y + pt[1]) for pt in stroke]
+            offset_strokes.append(shifted)
+
+        return offset_strokes, total_width
 
     def _process_offsets_to_mm(self,
                                offsets: np.ndarray,
@@ -177,6 +387,7 @@ class VasquezHandwritingEngine:
         Applies the exact drawing.py pipeline from sjvasquez/handwriting-synthesis
         and maps coordinates to physical millimeters on the notebook paper.
         """
+        offsets = offsets.copy()
         offsets[:, :2] *= 1.5
 
         if DRAWING_AVAILABLE:

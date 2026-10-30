@@ -120,10 +120,10 @@ Ans: Mechanics is the study of motion and physical forces.
 
 
     def test_all_handwriting_styles(self):
-        """Test all 11 handwriting presets across different font variants."""
+        """Test all 24 handwriting presets across different font variants."""
         md = "# Style Check\nQ1. Test question?\nAns: Testing multiple styles."
         for style_name in config.STYLE_PRESETS:
-            engine = layout_engine.LayoutEngine(cfg=self.cfg, style=style_name)
+            engine = layout_engine.LayoutEngine(cfg=self.cfg, style=style_name, engine_type="hershey")
             pages = engine.parse_markdown(md)
             self.assertGreater(pages[0].total_stroke_count, 10, f"Failed for style: {style_name}")
             preset = engine.get_style_preset(style_name)
