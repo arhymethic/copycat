@@ -497,13 +497,48 @@ def perturb_segment(p1: Tuple[float, float], p2: Tuple[float, float], wobble: fl
     return points
 
 
+def catmull_rom_spline(pts: Stroke, num_samples: int = 4) -> Stroke:
+    """Smooths a polyline using Catmull-Rom spline interpolation for organic curvature."""
+    if len(pts) < 3:
+        return pts
+
+    # Add virtual phantom endpoints
+    p_start = (2.0 * pts[0][0] - pts[1][0], 2.0 * pts[0][1] - pts[1][1])
+    p_end = (2.0 * pts[-1][0] - pts[-2][0], 2.0 * pts[-1][1] - pts[-2][1])
+    full_pts = [p_start] + list(pts) + [p_end]
+
+    smoothed: Stroke = []
+    for i in range(1, len(full_pts) - 2):
+        p0, p1, p2, p3 = full_pts[i - 1], full_pts[i], full_pts[i + 1], full_pts[i + 2]
+        for step in range(num_samples):
+            t = step / float(num_samples)
+            t2 = t * t
+            t3 = t2 * t
+            # Catmull-Rom matrix formula
+            x = 0.5 * (
+                (2.0 * p1[0]) +
+                (-p0[0] + p2[0]) * t +
+                (2.0 * p0[0] - 5.0 * p1[0] + 4.0 * p2[0] - p3[0]) * t2 +
+                (-p0[0] + 3.0 * p1[0] - 3.0 * p2[0] + p3[0]) * t3
+            )
+            y = 0.5 * (
+                (2.0 * p1[1]) +
+                (-p0[1] + p2[1]) * t +
+                (2.0 * p0[1] - 5.0 * p1[1] + 4.0 * p2[1] - p3[1]) * t2 +
+                (-p0[1] + 3.0 * p1[1] - 3.0 * p2[1] + p3[1]) * t3
+            )
+            smoothed.append((x, y))
+    smoothed.append(pts[-1])
+    return smoothed
+
+
 def humanize_stroke(stroke: Stroke,
                     slant_rad: float,
                     baseline_y: float,
                     jitter_x: float,
                     jitter_y: float,
                     wobble: float) -> Stroke:
-    """Apply slant shear, baseline jitter, and non-robotic micro-wobble to a stroke."""
+    """Apply slant shear, baseline jitter, spline curvature, and micro-wobble to a stroke."""
     if not stroke:
         return []
     
@@ -517,7 +552,11 @@ def humanize_stroke(stroke: Stroke,
         y_jittered = y + jitter_y
         transformed.append((x_slanted, y_jittered))
     
-    # 2. Add micro-wobble along the polyline
+    # 2. Smooth curves with Catmull-Rom spline interpolation if polyline has curves
+    if len(transformed) >= 3:
+        transformed = catmull_rom_spline(transformed, num_samples=3)
+
+    # 3. Add micro-wobble along the polyline
     if wobble <= 0.001 or len(transformed) < 2:
         return transformed
     

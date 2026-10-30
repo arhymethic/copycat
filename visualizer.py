@@ -184,12 +184,12 @@ class Visualizer:
             root.destroy()
 
         # Navigation buttons
-        tk.Button(bot_frame, text="◀ Prev [Left Arrow]", font=("sans-serif", 9), command=prev_page, bg="#2a2e3d", fg="#ffffff").pack(side=tk.LEFT, padx=10, pady=8)
-        tk.Button(bot_frame, text="Next [Right Arrow] ▶", font=("sans-serif", 9), command=next_page, bg="#2a2e3d", fg="#ffffff").pack(side=tk.LEFT, padx=4, pady=8)
+        tk.Button(bot_frame, text="< Previous [Left Arrow]", font=("sans-serif", 9), command=prev_page, bg="#2a2e3d", fg="#ffffff").pack(side=tk.LEFT, padx=10, pady=8)
+        tk.Button(bot_frame, text="Next [Right Arrow] >", font=("sans-serif", 9), command=next_page, bg="#2a2e3d", fg="#ffffff").pack(side=tk.LEFT, padx=4, pady=8)
 
         # Approval buttons
-        tk.Button(bot_frame, text="✖ Reject [N / ESC]", font=("sans-serif", 9, "bold"), command=reject, bg="#aa3333", fg="#ffffff", padx=10).pack(side=tk.RIGHT, padx=10, pady=8)
-        tk.Button(bot_frame, text="✔ Approve Plot [Y / Enter]", font=("sans-serif", 9, "bold"), command=approve, bg="#2e8b57", fg="#ffffff", padx=12).pack(side=tk.RIGHT, padx=4, pady=8)
+        tk.Button(bot_frame, text="Reject [N / ESC]", font=("sans-serif", 9, "bold"), command=reject, bg="#aa3333", fg="#ffffff", padx=10).pack(side=tk.RIGHT, padx=10, pady=8)
+        tk.Button(bot_frame, text="Approve Plot [Y / Enter]", font=("sans-serif", 9, "bold"), command=approve, bg="#2e8b57", fg="#ffffff", padx=12).pack(side=tk.RIGHT, padx=4, pady=8)
 
         # Keyboard bindings
         root.bind("<Left>", prev_page)

@@ -1,4 +1,4 @@
-# CopyCat 🖋️🐱
+# CopyCat
 ### Automated Text-to-Handwriting G-Code Generator & Visual Inspection Pipeline for 2D GRBL / CoreXY Pen Plotters
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -12,7 +12,7 @@ It features an **interactive Pygame visual inspection window**, **simulated 8.0 
 
 ---
 
-## ⚡ The Centerline Vector Difference
+## The Centerline Vector Difference
 
 ### Why Outline TTF/OTF Fonts Fail on Pen Plotters
 Standard digital fonts (`.ttf`, `.otf`, system fonts) describe **filled 2D closed polygon outlines**. When sent to a physical pen plotter with a ballpoint, gel pen, or fountain pen:
@@ -41,21 +41,23 @@ Furthermore, CopyCat applies **organic human variations**:
 
 ---
 
-## 📋 Table of Contents
-- [Architecture & Pipeline](#-architecture--pipeline)
-- [Two-Step Approval Workflow](#-two-step-approval-workflow)
-- [Repository Structure](#-repository-structure)
-- [Installation & Quick Start](#-installation--quick-start)
-- [Hardware Setup & Corner Jig](#-hardware-setup--corner-jig)
-- [Markdown Syntax Guide](#-markdown-syntax-guide)
-- [Neural Handwriting Synthesis Integration](#-neural-handwriting-synthesis-integration)
-- [Configuration (`config.py`)](#-configuration-configpy)
-- [CLI Reference](#-cli-reference)
-- [License](#-license)
+## Table of Contents
+- [Architecture & Pipeline](#architecture--pipeline)
+- [Two-Step Approval Workflow](#two-step-approval-workflow)
+- [Repository Structure](#repository-structure)
+- [Installation & Quick Start](#installation--quick-start)
+- [Hardware Setup & Corner Jig](#hardware-setup--corner-jig)
+- [Markdown Syntax Guide](#markdown-syntax-guide)
+- [Neural Handwriting Synthesis Integration](#neural-handwriting-synthesis-integration)
+- [Configuration (`config.py`)](#configuration-configpy)
+- [Interactive Studio GUI](#interactive-studio-gui)
+- [Complete Handwriting Styles Catalog](#complete-handwriting-styles-catalog)
+- [CLI Reference](#cli-reference)
+- [License](#license)
 
 ---
 
-## 🏗️ Architecture & Pipeline
+## Architecture & Pipeline
 
 ```
   ┌─────────────────┐
@@ -108,7 +110,7 @@ Furthermore, CopyCat applies **organic human variations**:
 
 ---
 
-## 🛡️ Two-Step Approval Workflow
+## Two-Step Approval Workflow
 
 CopyCat strictly enforces a **"verify-before-send"** safety philosophy. It **never** streams blindly to physical hardware:
 
@@ -135,7 +137,7 @@ CopyCat strictly enforces a **"verify-before-send"** safety philosophy. It **nev
 
 ---
 
-## 📁 Repository Structure
+## Repository Structure
 
 ```
 copycat/
@@ -161,7 +163,7 @@ copycat/
 
 ---
 
-## 🚀 Installation & Quick Start
+## Installation & Quick Start
 
 ### 1. Clone the Repository
 ```bash
@@ -191,7 +193,7 @@ python3 main.py assignment.md --dry-run
 
 ---
 
-## 📐 Hardware Setup & Corner Jig
+## Hardware Setup & Corner Jig
 
 CopyCat is designed for standard 2D pen plotters and CNC drawing machines:
 - **Kinematics**: CoreXY or Cartesian (X/Y gantry) running GRBL 1.1 firmware.
@@ -222,7 +224,7 @@ CopyCat is designed for standard 2D pen plotters and CNC drawing machines:
 
 ---
 
-## ✍️ Markdown Syntax Guide
+## Markdown Syntax Guide
 
 Create your homework or notes in standard Markdown (`assignment.md`). CopyCat automatically structures the handwriting based on formatting cues:
 
@@ -250,10 +252,10 @@ Ans: The work done by a constant force is defined as the scalar dot product of t
 
 ---
 
-## 🧠 Neural Handwriting Synthesis Integration
+## Neural Handwriting Synthesis Integration
 
 CopyCat integrates directly with Sean Vasquez's recurrent neural network synthesis engine:
-👉 **[https://github.com/sjvasquez/handwriting-synthesis](https://github.com/sjvasquez/handwriting-synthesis)**
+[https://github.com/sjvasquez/handwriting-synthesis](https://github.com/sjvasquez/handwriting-synthesis)
 
 The entire `sjvasquez/handwriting-synthesis` repository is **already cloned locally** inside `copycat/handwriting-synthesis`:
 - **Pre-trained Checkpoints (`checkpoints/model-17900.*`)**: 42 MB pretrained Alex Graves LSTM model weights.
@@ -273,7 +275,7 @@ python3 main.py assignment.md --engine rnn --style rnn-2
 
 ---
 
-## ⚙️ Configuration (`config.py`)
+## Configuration (`config.py`)
 
 All machine, page, and handwriting parameters are centralized in [`config.py`](config.py):
 
@@ -309,32 +311,33 @@ MICRO_WOBBLE = 0.04         # Anti-robotic hand tremor (mm)
 
 ---
 
-## 🎨 Interactive Tkinter Studio & GUI
+## Interactive Studio GUI
 
-In addition to the Pygame inspection canvas, CopyCat includes a **full desktop Tkinter Studio (`ui.py`)**:
+In addition to the visual inspection canvas, CopyCat includes a full desktop Dark Mode Studio (`ui.py`):
 
 ```bash
-# Launch Tkinter GUI Studio
+# Launch Dark Mode Studio
 python3 main.py --gui
 # Or directly:
 python3 ui.py assignment.md
 ```
 
-### Features of the GUI Studio:
-- **Live 8.0 mm Ruled Sheet Canvas**: Auto-renders your handwriting on simulated notebook paper with margins.
-- **Instant Style Dropdown**: Switch between all 11 handwriting styles and see the canvas update in real time.
-- **Interactive Fine-Tuning Sliders**:
-  - **Slant Angle Slider** ($-5^\circ\text{ to }+25^\circ$)
-  - **Baseline Jitter Slider** ($0.0\text{ to }0.50\text{ mm}$)
-  - **Micro-Wobble / Tremor Slider** ($0.0\text{ to }0.12\text{ mm}$)
-  - **Kerning Variance Slider** ($0.0\text{ to }0.30\text{ mm}$)
-  - **Font Scale Slider** ($0.20\text{ to }0.55$)
-- **Live Markdown Editor**: Pop open a text window, edit notes or equations, and click *Apply* to re-render.
-- **Serial Plotter Hub**: Scan available USB serial ports, toggle dry-run simulation, and stream directly with a real-time progress bar.
+### Features of the Studio:
+- **Interactive Ruled Sheet Canvas**: Auto-renders your handwriting on simulated notebook paper with margins. Full click-and-drag pan, mousewheel zoom, and hover coordinate HUD.
+- **Embedded Markdown Editor**: Live multiline text area with disk sync and auto-reloading when `assignment.md` is edited externally.
+- **Plotting Simulation**: Real-time virtual pen animation showing motion trajectories stroke by stroke.
+- **Instant Style Selection**: Switch between all 24 handwriting styles with current fine-tuning slider values preserved.
+- **Granular Sliders**:
+  - Slant Angle ($-5^\circ$ to $+32^\circ$)
+  - Baseline Jitter ($0.0$ to $0.50\text{ mm}$)
+  - Micro-Wobble / Tremor ($0.0$ to $0.12\text{ mm}$)
+  - Kerning Variance ($0.0$ to $0.30\text{ mm}$)
+  - Font Scale ($0.20$ to $0.55$)
+- **Serial Plotter Hub**: Scan available USB serial ports, toggle dry-run simulation, export clean GRBL G-code, and stream to physical plotter hardware.
 
 ---
 
-## 🖋️ Complete Handwriting Styles Catalog
+## Complete Handwriting Styles Catalog
 
 CopyCat provides **24 handwriting styles** accessible via `--style <key>`, the numbered CLI picker (`-i`), or the Tkinter GUI Studio:
 
@@ -377,7 +380,7 @@ python3 main.py --list-styles
 
 ---
 
-## 💻 CLI Reference
+## CLI Reference
 
 ```text
 usage: main.py [-h] [--gui] [--ui {auto,pygame,tkinter,none}]
@@ -457,6 +460,6 @@ options:
 
 ---
 
-## 📄 License
+## License
 This project is licensed under the [MIT License](LICENSE).
 

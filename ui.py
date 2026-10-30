@@ -1,15 +1,15 @@
 """
-ui.py - Interactive Tkinter GUI Studio for CopyCat.
+ui.py - Professional Dark Mode Studio for CopyCat Pen Plotter Pipeline.
 
 Features:
-1. Live Notebook Canvas: Renders realistic 8.0 mm ruled notebook paper, margins,
-   and single-stroke handwriting trajectories in real-time.
-2. Rich Handwriting Style Library: Instant dropdown selection across 11 distinct
-   handwriting styles (Student, Overachiever, Draftsman, Rushed Exam, Cursive Script, etc.).
-3. Fine-Tuning Sliders: Real-time interactive adjustment of Slant, Baseline Jitter,
-   Micro-Wobble / Tremor, Kerning, and Scale.
-4. Embedded Markdown Editor: Edit or write notes live with instant preview update.
-5. G-Code Exporter & USB Streamer: One-click export and USB serial plotter streaming.
+1. Live Interactive Canvas: Realistic notebook ruling, margins, and vector trajectories.
+   Full pan (click-and-drag), mouse wheel zoom, coordinate inspection HUD.
+2. Real-Time Plot Simulation: Step-by-step pen drawing animation playback.
+3. Dual-Panel Interface:
+   - Embedded Markdown Editor with disk sync and auto-reload on file change.
+   - Style library and granular handwriting parameter sliders.
+4. Preserved Parameter Tuning: Switching handwriting styles keeps custom slider settings.
+5. Professional Dark Mode: High-contrast, clean industrial CAD/CAM appearance without emojis.
 """
 
 import math
@@ -17,7 +17,7 @@ import os
 import sys
 import threading
 import time
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import config
 import layout_engine
@@ -32,49 +32,155 @@ except ImportError:
     TKINTER_AVAILABLE = False
 
 
+# Theme color palette (Professional Deep Charcoal / Midnight Dark)
+DARK_BG = "#14151f"
+DARK_PANEL = "#1b1c28"
+DARK_PANEL_ALT = "#222434"
+DARK_BORDER = "#2c2e42"
+DARK_TEXT = "#e2e5f0"
+DARK_MUTED = "#868ba3"
+DARK_INPUT = "#101119"
+DARK_ACCENT = "#4f86f7"
+DARK_ACCENT_HOVER = "#6b9bf9"
+DARK_BTN = "#252738"
+DARK_BTN_HOVER = "#32354c"
+PAPER_BG = "#fbfaf6"
+RULING_BLUE = "#d8e5f2"
+MARGIN_RED = "#e57373"
+INK_NAVY = "#1a1f3c"
+
+
 class CopyCatStudio:
-    """Tkinter Desktop Studio for CopyCat Pen Plotter Pipeline."""
+    """Professional Pen Plotter Desktop Studio for CopyCat."""
 
     def __init__(self, root: tk.Tk, initial_file: str = "assignment.md"):
         self.root = root
-        self.root.title("CopyCat - Handwriting Pen Plotter Studio")
-        self.root.geometry("1200x850")
-        self.root.minsize(950, 700)
+        self.root.title("CopyCat - Pen Plotter Studio")
+        self.root.geometry("1300x880")
+        self.root.minsize(1000, 720)
+        self.root.configure(bg=DARK_BG)
 
-        # State
+        # Pipeline state
         self.cfg = config.PlotterConfig()
-        self.current_filepath = initial_file if os.path.exists(initial_file) else "assignment.md"
+        self.current_filepath = os.path.abspath(initial_file if os.path.exists(initial_file) else "assignment.md")
+        self.last_mtime = 0.0
         self.markdown_content = ""
         self.pages: List[layout_engine.Page] = []
         self.current_page_idx = 0
-        self.zoom_level = 1.0
 
-        # Handwriting parameter variables
+        # Interactive Canvas state (Pan & Zoom)
+        self.zoom_level = 1.0
+        self.pan_x = 0.0
+        self.pan_y = 0.0
+        self._drag_start_x = 0
+        self._drag_start_y = 0
+        self._is_dragging = False
+
+        # Simulation animation state
+        self.sim_animating = False
+        self.sim_stroke_idx = 0
+        self.sim_speed = 5  # strokes per frame
+
+        # Style & parameter variables
         self.style_var = tk.StringVar(value="natural")
         self.slant_var = tk.DoubleVar(value=config.STYLE_PRESETS["natural"]["slant"])
         self.jitter_var = tk.DoubleVar(value=config.STYLE_PRESETS["natural"]["jitter"])
         self.wobble_var = tk.DoubleVar(value=config.STYLE_PRESETS["natural"]["wobble"])
         self.kerning_var = tk.DoubleVar(value=config.STYLE_PRESETS["natural"]["kerning_var"])
         self.scale_var = tk.DoubleVar(value=0.34)
+        self.style_desc_var = tk.StringVar(value=config.STYLE_PRESETS["natural"]["description"])
 
         # Serial settings
         self.port_var = tk.StringVar(value=self.cfg.port)
         self.baud_var = tk.IntVar(value=self.cfg.baud_rate)
         self.dry_run_var = tk.BooleanVar(value=True)
 
-        # Style description variable
-        self.style_desc_var = tk.StringVar(value=config.STYLE_PRESETS["natural"]["description"])
+        # Coordinate HUD
+        self.hud_coords_var = tk.StringVar(value="X: 0.0 mm | Y: 0.0 mm")
 
-        # Setup UI
-        self._load_initial_file()
+        # Build application
+        self._setup_styles()
+        self._load_file_from_disk()
         self._build_ui()
         self.update_pipeline()
 
-    def _load_initial_file(self):
-        """Loads file content or generates sample content if absent."""
+        # Start background disk watcher
+        self._schedule_file_watch()
+
+    def _setup_styles(self):
+        """Applies clean dark theme across all ttk widgets."""
+        self.style = ttk.Style(self.root)
+        try:
+            self.style.theme_use("clam")
+        except tk.TclError:
+            pass
+
+        self.style.configure(".", background=DARK_BG, foreground=DARK_TEXT, borderwidth=0)
+        self.style.configure("TFrame", background=DARK_BG)
+        self.style.configure("Panel.TFrame", background=DARK_PANEL)
+        self.style.configure("PanelAlt.TFrame", background=DARK_PANEL_ALT)
+
+        self.style.configure("TLabel", background=DARK_BG, foreground=DARK_TEXT, font=("sans-serif", 9))
+        self.style.configure("Panel.TLabel", background=DARK_PANEL, foreground=DARK_TEXT, font=("sans-serif", 9))
+        self.style.configure("Muted.TLabel", background=DARK_PANEL, foreground=DARK_MUTED, font=("sans-serif", 8))
+        self.style.configure("Header.TLabel", background=DARK_PANEL, foreground=DARK_TEXT, font=("sans-serif", 10, "bold"))
+        self.style.configure("Accent.TLabel", background=DARK_PANEL, foreground=DARK_ACCENT, font=("sans-serif", 9, "bold"))
+
+        self.style.configure("TButton",
+                             background=DARK_BTN,
+                             foreground=DARK_TEXT,
+                             font=("sans-serif", 9),
+                             padding=(8, 4),
+                             borderwidth=1,
+                             relief="flat")
+        self.style.map("TButton",
+                       background=[("active", DARK_BTN_HOVER), ("disabled", DARK_BG)],
+                       foreground=[("disabled", DARK_MUTED)])
+
+        self.style.configure("Primary.TButton",
+                             background=DARK_ACCENT,
+                             foreground="#ffffff",
+                             font=("sans-serif", 9, "bold"),
+                             padding=(8, 5))
+        self.style.map("Primary.TButton",
+                       background=[("active", DARK_ACCENT_HOVER)])
+
+        self.style.configure("TNotebook", background=DARK_PANEL, borderwidth=0)
+        self.style.configure("TNotebook.Tab",
+                             background=DARK_PANEL_ALT,
+                             foreground=DARK_MUTED,
+                             padding=(12, 6),
+                             font=("sans-serif", 9))
+        self.style.map("TNotebook.Tab",
+                       background=[("selected", DARK_PANEL)],
+                       foreground=[("selected", DARK_TEXT)])
+
+        self.style.configure("TCombobox",
+                             fieldbackground=DARK_INPUT,
+                             background=DARK_BTN,
+                             foreground=DARK_TEXT,
+                             selectbackground=DARK_ACCENT,
+                             selectforeground="#ffffff",
+                             font=("sans-serif", 9))
+
+        self.style.configure("TCheckbutton", background=DARK_PANEL, foreground=DARK_TEXT)
+        self.style.map("TCheckbutton", background=[("active", DARK_PANEL)])
+
+        self.style.configure("TScale", background=DARK_PANEL, troughcolor=DARK_INPUT)
+
+    def _load_file_from_disk(self) -> bool:
+        """Loads file content from disk and tracks modification timestamp."""
         if os.path.exists(self.current_filepath):
-            with open(self.current_filepath, "r", encoding="utf-8") as f:
-                self.markdown_content = f.read()
+            try:
+                mtime = os.path.getmtime(self.current_filepath)
+                with open(self.current_filepath, "r", encoding="utf-8") as f:
+                    content = f.read()
+                self.markdown_content = content
+                self.last_mtime = mtime
+                return True
+            except Exception as e:
+                print(f"[ERROR] Failed to read {self.current_filepath}: {e}")
+                return False
         else:
             self.markdown_content = (
                 "# Classical Mechanics: Problem Set 2\n\n"
@@ -86,148 +192,259 @@ class CopyCatStudio:
                 "    dW = F * dx = m * v * dv\n"
                 "Integrating gives: W = Delta K.\n"
             )
+            return False
+
+    def _schedule_file_watch(self):
+        """Polls disk every 1000ms. If external editor saves changes, auto-reloads."""
+        if hasattr(self, "root") and self.root.winfo_exists():
+            try:
+                if os.path.exists(self.current_filepath):
+                    mtime = os.path.getmtime(self.current_filepath)
+                    if mtime > self.last_mtime:
+                        self._load_file_from_disk()
+                        if hasattr(self, "editor_txt"):
+                            self.editor_txt.delete("1.0", tk.END)
+                            self.editor_txt.insert("1.0", self.markdown_content)
+                        self.update_pipeline()
+            except Exception:
+                pass
+            self.root.after(1000, self._schedule_file_watch)
 
     def _build_ui(self):
-        """Constructs the responsive left sidebar and right canvas view."""
-        # Top-level paned layout
-        paned = ttk.PanedWindow(self.root, orient=tk.HORIZONTAL)
+        """Constructs split-pane interface with dark theme layout."""
+        paned = tk.PanedWindow(self.root, orient=tk.HORIZONTAL, bg=DARK_BORDER, bd=1, sashwidth=4)
         paned.pack(fill=tk.BOTH, expand=True)
 
         # ----------------------------------------------------------------------
-        # Left Sidebar (Controls)
+        # Left Panel (Sidebar with Notebook Tabs)
         # ----------------------------------------------------------------------
-        sidebar_frame = ttk.Frame(paned, padding=12, width=380)
-        paned.add(sidebar_frame, weight=0)
+        left_container = ttk.Frame(paned, style="Panel.TFrame", width=420)
+        paned.add(left_container, minsize=360)
 
-        # Document Section
-        doc_group = ttk.LabelFrame(sidebar_frame, text="📄 Document Source", padding=8)
-        doc_group.pack(fill=tk.X, pady=(0, 8))
+        # Header bar
+        header_bar = ttk.Frame(left_container, style="Panel.TFrame", padding=(12, 10))
+        header_bar.pack(fill=tk.X)
 
-        file_row = ttk.Frame(doc_group)
-        file_row.pack(fill=tk.X)
-        self.file_label = ttk.Label(file_row, text=os.path.basename(self.current_filepath), font=("sans-serif", 10, "bold"))
+        title_lbl = ttk.Label(header_bar, text="COPYCAT", font=("sans-serif", 13, "bold"), foreground=DARK_ACCENT)
+        title_lbl.pack(side=tk.LEFT)
+        sub_lbl = ttk.Label(header_bar, text="  Plotter Studio", style="Muted.TLabel")
+        sub_lbl.pack(side=tk.LEFT)
+
+        # Notebook tabs
+        self.notebook = ttk.Notebook(left_container)
+        self.notebook.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
+
+        # Tab 1: Editor & Source
+        tab_editor = ttk.Frame(self.notebook, style="Panel.TFrame", padding=10)
+        self.notebook.add(tab_editor, text="Markdown Source")
+
+        # Tab 2: Style & Tuning
+        tab_style = ttk.Frame(self.notebook, style="Panel.TFrame", padding=10)
+        self.notebook.add(tab_style, text="Handwriting Style")
+
+        # Tab 3: Hardware & Streamer
+        tab_hardware = ttk.Frame(self.notebook, style="Panel.TFrame", padding=10)
+        self.notebook.add(tab_hardware, text="Machine & Serial")
+
+        self._build_editor_tab(tab_editor)
+        self._build_style_tab(tab_style)
+        self._build_hardware_tab(tab_hardware)
+
+        # ----------------------------------------------------------------------
+        # Right Panel (Interactive Canvas & Viewport)
+        # ----------------------------------------------------------------------
+        right_container = ttk.Frame(paned, style="TFrame")
+        paned.add(right_container, minsize=500)
+
+        self._build_canvas_view(right_container)
+
+    def _build_editor_tab(self, parent: ttk.Frame):
+        """Embedded Markdown source editor with disk reload & re-render buttons."""
+        file_row = ttk.Frame(parent, style="Panel.TFrame")
+        file_row.pack(fill=tk.X, pady=(0, 8))
+
+        self.file_label = ttk.Label(file_row, text=os.path.basename(self.current_filepath), style="Header.TLabel")
         self.file_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
-        btn_browse = ttk.Button(file_row, text="Browse...", command=self._on_browse_file)
+        btn_browse = ttk.Button(file_row, text="Browse", command=self._on_browse_file)
         btn_browse.pack(side=tk.RIGHT, padx=(4, 0))
 
-        btn_edit = ttk.Button(doc_group, text="✏️ Edit Markdown Live", command=self._on_open_editor)
-        btn_edit.pack(fill=tk.X, pady=(6, 0))
+        btn_reload = ttk.Button(file_row, text="Reload Disk", command=self._on_reload_disk)
+        btn_reload.pack(side=tk.RIGHT)
 
-        # Handwriting Style Section (The user's core request!)
-        style_group = ttk.LabelFrame(sidebar_frame, text="🖋️ Handwriting Style", padding=8)
-        style_group.pack(fill=tk.X, pady=(0, 8))
+        # Editor text area
+        text_frame = tk.Frame(parent, bg=DARK_BORDER, bd=1)
+        text_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 8))
 
-        # Style dropdown
+        self.editor_txt = tk.Text(
+            text_frame,
+            wrap=tk.WORD,
+            bg=DARK_INPUT,
+            fg=DARK_TEXT,
+            insertbackground=DARK_ACCENT,
+            selectbackground=DARK_ACCENT,
+            selectforeground="#ffffff",
+            font=("monospace", 10),
+            padx=8,
+            pady=8,
+            bd=0,
+            undo=True
+        )
+        self.editor_txt.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.editor_txt.insert("1.0", self.markdown_content)
+
+        scroll = ttk.Scrollbar(text_frame, orient=tk.VERTICAL, command=self.editor_txt.yview)
+        scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self.editor_txt.configure(yscrollcommand=scroll.set)
+
+        # Action bar
+        action_bar = ttk.Frame(parent, style="Panel.TFrame")
+        action_bar.pack(fill=tk.X)
+
+        btn_apply = ttk.Button(action_bar, text="Apply Changes & Re-render", style="Primary.TButton", command=self._on_apply_editor)
+        btn_apply.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 4))
+
+        btn_save = ttk.Button(action_bar, text="Save to Disk", command=self._on_save_editor_to_disk)
+        btn_save.pack(side=tk.RIGHT)
+
+    def _build_style_tab(self, parent: ttk.Frame):
+        """Handwriting style dropdown and persistent fine-tuning sliders."""
+        # Style selector
+        lbl_style = ttk.Label(parent, text="Handwriting Style Preset", style="Header.TLabel")
+        lbl_style.pack(anchor=tk.W, pady=(0, 4))
+
         style_choices = list(config.STYLE_PRESETS.keys())
-        style_cb = ttk.Combobox(
-            style_group,
+        self.style_cb = ttk.Combobox(
+            parent,
             textvariable=self.style_var,
             values=style_choices,
             state="readonly",
             font=("sans-serif", 10, "bold")
         )
-        style_cb.pack(fill=tk.X)
-        style_cb.bind("<<ComboboxSelected>>", self._on_style_selected)
+        self.style_cb.pack(fill=tk.X, pady=(0, 4))
+        self.style_cb.bind("<<ComboboxSelected>>", self._on_style_selected)
 
         desc_lbl = ttk.Label(
-            style_group,
+            parent,
             textvariable=self.style_desc_var,
-            wraplength=340,
-            font=("sans-serif", 9),
-            foreground="#444455"
+            wraplength=380,
+            style="Muted.TLabel"
         )
-        desc_lbl.pack(fill=tk.X, pady=(6, 4))
+        desc_lbl.pack(fill=tk.X, pady=(0, 12))
 
-        # Fine-Tuning Parameter Sliders
-        sliders_group = ttk.LabelFrame(sidebar_frame, text="🎛️ Organic Sliders", padding=8)
-        sliders_group.pack(fill=tk.X, pady=(0, 8))
+        # Fine-tuning sliders
+        sliders_lbl = ttk.Label(parent, text="Fine-Tuning Parameters", style="Header.TLabel")
+        sliders_lbl.pack(anchor=tk.W, pady=(0, 4))
 
-        # Slant slider
-        self._create_slider(sliders_group, "Slant Angle (°):", self.slant_var, -5.0, 25.0, 0.5)
-        # Jitter slider
-        self._create_slider(sliders_group, "Baseline Jitter (mm):", self.jitter_var, 0.0, 0.50, 0.02)
-        # Wobble slider
-        self._create_slider(sliders_group, "Micro-Wobble / Tremor:", self.wobble_var, 0.0, 0.12, 0.005)
-        # Kerning slider
-        self._create_slider(sliders_group, "Kerning Variance (mm):", self.kerning_var, 0.0, 0.30, 0.01)
-        # Font Scale
-        self._create_slider(sliders_group, "Text Scale:", self.scale_var, 0.20, 0.55, 0.01)
+        slider_box = ttk.Frame(parent, style="Panel.TFrame")
+        slider_box.pack(fill=tk.X, pady=(0, 8))
 
-        btn_reset = ttk.Button(sliders_group, text="Reset to Style Defaults", command=self._on_reset_sliders)
-        btn_reset.pack(fill=tk.X, pady=(6, 2))
+        self._create_slider(slider_box, "Slant Angle (°):", self.slant_var, -5.0, 32.0)
+        self._create_slider(slider_box, "Baseline Jitter (mm):", self.jitter_var, 0.0, 0.50)
+        self._create_slider(slider_box, "Micro-Wobble / Tremor:", self.wobble_var, 0.0, 0.12)
+        self._create_slider(slider_box, "Kerning Variance (mm):", self.kerning_var, 0.0, 0.30)
+        self._create_slider(slider_box, "Text Scale:", self.scale_var, 0.20, 0.55)
 
-        # Hardware & Serial Section
-        plotter_group = ttk.LabelFrame(sidebar_frame, text="🔌 Machine & Serial Port", padding=8)
-        plotter_group.pack(fill=tk.X, pady=(0, 8))
+        btn_reset = ttk.Button(parent, text="Reset Sliders to Style Defaults", command=self._on_reset_sliders)
+        btn_reset.pack(fill=tk.X, pady=(4, 12))
 
-        port_row = ttk.Frame(plotter_group)
-        port_row.pack(fill=tk.X)
-        ttk.Label(port_row, text="Port:").pack(side=tk.LEFT)
-        self.port_entry = ttk.Entry(port_row, textvariable=self.port_var, width=14)
-        self.port_entry.pack(side=tk.LEFT, padx=4)
-        ttk.Button(port_row, text="Scan", width=6, command=self._on_scan_ports).pack(side=tk.LEFT)
+        # Re-render button
+        btn_render = ttk.Button(parent, text="Re-render Canvas", style="Primary.TButton", command=self.update_pipeline)
+        btn_render.pack(fill=tk.X)
 
-        baud_row = ttk.Frame(plotter_group)
-        baud_row.pack(fill=tk.X, pady=(4, 0))
-        ttk.Label(baud_row, text="Baud:").pack(side=tk.LEFT)
-        baud_cb = ttk.Combobox(baud_row, textvariable=self.baud_var, values=[115200, 250000, 57600], width=10, state="readonly")
+    def _build_hardware_tab(self, parent: ttk.Frame):
+        """Machine connection settings and G-code export/streaming controls."""
+        sec_lbl = ttk.Label(parent, text="Machine Communication", style="Header.TLabel")
+        sec_lbl.pack(anchor=tk.W, pady=(0, 8))
+
+        port_row = ttk.Frame(parent, style="Panel.TFrame")
+        port_row.pack(fill=tk.X, pady=(0, 6))
+        ttk.Label(port_row, text="Serial Port:", style="Panel.TLabel", width=12).pack(side=tk.LEFT)
+        port_entry = ttk.Entry(port_row, textvariable=self.port_var, width=16)
+        port_entry.pack(side=tk.LEFT, padx=4)
+        ttk.Button(port_row, text="Scan Ports", command=self._on_scan_ports).pack(side=tk.LEFT)
+
+        baud_row = ttk.Frame(parent, style="Panel.TFrame")
+        baud_row.pack(fill=tk.X, pady=(0, 6))
+        ttk.Label(baud_row, text="Baud Rate:", style="Panel.TLabel", width=12).pack(side=tk.LEFT)
+        baud_cb = ttk.Combobox(baud_row, textvariable=self.baud_var, values=[115200, 250000, 57600], width=12, state="readonly")
         baud_cb.pack(side=tk.LEFT, padx=4)
 
-        dry_run_chk = ttk.Checkbutton(plotter_group, text="Dry-Run Simulation (No Hardware)", variable=self.dry_run_var)
-        dry_run_chk.pack(anchor=tk.W, pady=(4, 0))
+        dry_chk = ttk.Checkbutton(parent, text="Dry-Run Simulation Mode (No hardware)", variable=self.dry_run_var)
+        dry_chk.pack(anchor=tk.W, pady=(6, 14))
 
-        # Action Buttons
-        btn_render = ttk.Button(sidebar_frame, text="🔄 Re-render Canvas", command=self.update_pipeline)
-        btn_render.pack(fill=tk.X, pady=(0, 4))
+        btn_export = ttk.Button(parent, text="Export GRBL G-Code", command=self._on_export_gcode)
+        btn_export.pack(fill=tk.X, pady=(0, 6))
 
-        btn_export = ttk.Button(sidebar_frame, text="💾 Export G-Code (.gcode)", command=self._on_export_gcode)
-        btn_export.pack(fill=tk.X, pady=(0, 4))
+        btn_stream = ttk.Button(parent, text="Stream to Plotter Hardware", style="Primary.TButton", command=self._on_stream_plotter)
+        btn_stream.pack(fill=tk.X)
 
-        btn_stream = ttk.Button(sidebar_frame, text="🚀 Stream to Pen Plotter", command=self._on_stream_plotter)
-        btn_stream.pack(fill=tk.X, pady=(0, 4))
-
-        # ----------------------------------------------------------------------
-        # Right Main Canvas (Live Ruled Sheet Preview)
-        # ----------------------------------------------------------------------
-        canvas_container = ttk.Frame(paned)
-        paned.add(canvas_container, weight=1)
-
-        # Toolbar above canvas
-        toolbar = ttk.Frame(canvas_container, padding=6)
+    def _build_canvas_view(self, parent: ttk.Frame):
+        """Constructs interactive viewport toolbar, canvas, and status HUD."""
+        # Viewport Toolbar
+        toolbar = ttk.Frame(parent, style="Panel.TFrame", padding=(10, 6))
         toolbar.pack(fill=tk.X)
 
-        self.btn_prev = ttk.Button(toolbar, text="◀ Prev Page", command=self._on_prev_page)
+        self.btn_prev = ttk.Button(toolbar, text="< Previous", command=self._on_prev_page)
         self.btn_prev.pack(side=tk.LEFT, padx=2)
 
-        self.page_indicator = ttk.Label(toolbar, text="Page 1 of 1", font=("sans-serif", 10, "bold"))
+        self.page_indicator = ttk.Label(toolbar, text="Page 1 of 1", style="Header.TLabel")
         self.page_indicator.pack(side=tk.LEFT, padx=10)
 
-        self.btn_next = ttk.Button(toolbar, text="Next Page ▶", command=self._on_next_page)
+        self.btn_next = ttk.Button(toolbar, text="Next >", command=self._on_next_page)
         self.btn_next.pack(side=tk.LEFT, padx=2)
 
-        # Zoom controls
-        ttk.Button(toolbar, text="Zoom In (+)", command=lambda: self._adjust_zoom(1.15)).pack(side=tk.LEFT, padx=(20, 2))
-        ttk.Button(toolbar, text="Zoom Out (-)", command=lambda: self._adjust_zoom(0.85)).pack(side=tk.LEFT, padx=2)
-        ttk.Button(toolbar, text="Fit Width", command=self._fit_width).pack(side=tk.LEFT, padx=2)
+        # Zoom & Navigation buttons
+        ttk.Separator(toolbar, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=10)
 
-        self.stats_label = ttk.Label(toolbar, text="Strokes: 0", font=("sans-serif", 9), foreground="#555566")
-        self.stats_label.pack(side=tk.RIGHT, padx=10)
+        ttk.Button(toolbar, text="Zoom In (+)", command=lambda: self._adjust_zoom(1.20)).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="Zoom Out (-)", command=lambda: self._adjust_zoom(0.80)).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="Fit Width", command=self._fit_width).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="Fit Page", command=self._fit_page).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="100% Reset", command=self._reset_view).pack(side=tk.LEFT, padx=2)
+
+        # Simulation animation button
+        ttk.Separator(toolbar, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=10)
+        self.btn_sim = ttk.Button(toolbar, text="Simulate Plotting", command=self._toggle_simulation)
+        self.btn_sim.pack(side=tk.LEFT, padx=2)
+
+        self.stats_label = ttk.Label(toolbar, text="Strokes: 0", style="Muted.TLabel")
+        self.stats_label.pack(side=tk.RIGHT, padx=6)
 
         # Drawing Canvas
-        self.canvas = tk.Canvas(canvas_container, bg="#181a20", highlightthickness=0)
+        self.canvas = tk.Canvas(parent, bg="#0d0e14", highlightthickness=0, cursor="fleur")
         self.canvas.pack(fill=tk.BOTH, expand=True)
+
+        # Canvas Event Bindings
         self.canvas.bind("<Configure>", lambda e: self._draw_page())
+        self.canvas.bind("<ButtonPress-1>", self._on_canvas_press)
+        self.canvas.bind("<B1-Motion>", self._on_canvas_drag)
+        self.canvas.bind("<ButtonRelease-1>", self._on_canvas_release)
+        self.canvas.bind("<Motion>", self._on_canvas_motion)
+        self.canvas.bind("<MouseWheel>", self._on_canvas_wheel)
+        self.canvas.bind("<Button-4>", lambda e: self._adjust_zoom(1.15))
+        self.canvas.bind("<Button-5>", lambda e: self._adjust_zoom(0.85))
+
+        # Bottom Status HUD
+        status_hud = ttk.Frame(parent, style="Panel.TFrame", padding=(10, 4))
+        status_hud.pack(fill=tk.X)
+
+        self.hud_label = ttk.Label(status_hud, textvariable=self.hud_coords_var, style="Muted.TLabel")
+        self.hud_label.pack(side=tk.LEFT)
+
+        guide_lbl = ttk.Label(status_hud, text="Drag to Pan | Scroll to Zoom | Click Simulate to preview pen travel", style="Muted.TLabel")
+        guide_lbl.pack(side=tk.RIGHT)
 
     def _create_slider(self, parent: ttk.Frame, label_text: str, variable: tk.DoubleVar,
-                       min_val: float, max_val: float, step: float):
-        """Creates a labeled slider linked to instant re-render."""
-        row = ttk.Frame(parent)
+                       min_val: float, max_val: float):
+        """Creates slider linked to instant re-rendering without resetting other parameters."""
+        row = ttk.Frame(parent, style="Panel.TFrame")
         row.pack(fill=tk.X, pady=2)
-        
-        val_lbl = ttk.Label(row, text=f"{variable.get():.2f}", width=5)
-        lbl = ttk.Label(row, text=label_text, width=18)
+
+        lbl = ttk.Label(row, text=label_text, style="Panel.TLabel", width=20)
         lbl.pack(side=tk.LEFT)
+
+        val_lbl = ttk.Label(row, text=f"{variable.get():.2f}", style="Accent.TLabel", width=6)
         val_lbl.pack(side=tk.RIGHT)
 
         def on_change(val):
@@ -245,11 +462,22 @@ class CopyCatStudio:
         scale.pack(fill=tk.X, pady=(0, 4))
 
     def _on_style_selected(self, event=None):
-        """Called when a new style preset is picked from the dropdown."""
+        """
+        When user changes handwriting style, PRESERVE current slider settings
+        and apply them immediately to the new style.
+        """
         key = self.style_var.get()
         if key in config.STYLE_PRESETS:
             preset = config.STYLE_PRESETS[key]
             self.style_desc_var.set(preset["description"])
+            # DO NOT overwrite user sliders! Apply current parameters to the new style!
+            self.update_pipeline()
+
+    def _on_reset_sliders(self):
+        """Explicitly reset sliders to the active style defaults."""
+        key = self.style_var.get()
+        if key in config.STYLE_PRESETS:
+            preset = config.STYLE_PRESETS[key]
             self.slant_var.set(preset["slant"])
             self.jitter_var.set(preset["jitter"])
             self.wobble_var.set(preset["wobble"])
@@ -257,73 +485,54 @@ class CopyCatStudio:
             self.scale_var.set(0.34 * preset.get("scale_mult", 1.0))
             self.update_pipeline()
 
-    def _on_reset_sliders(self):
-        """Resets sliders to current style default values."""
-        self._on_style_selected()
+    def _on_apply_editor(self):
+        """Applies text from the embedded editor, updates state, and re-renders."""
+        self.markdown_content = self.editor_txt.get("1.0", tk.END).strip()
+        self.update_pipeline()
 
-    def _adjust_zoom(self, factor: float):
-        self.zoom_level = max(0.4, min(3.0, self.zoom_level * factor))
-        self._draw_page()
+    def _on_save_editor_to_disk(self):
+        """Saves current editor content to disk."""
+        self.markdown_content = self.editor_txt.get("1.0", tk.END).strip()
+        try:
+            with open(self.current_filepath, "w", encoding="utf-8") as f:
+                f.write(self.markdown_content)
+            self.last_mtime = os.path.getmtime(self.current_filepath)
+            messagebox.showinfo("Saved", f"Successfully saved to {os.path.basename(self.current_filepath)}")
+        except Exception as e:
+            messagebox.showerror("Save Error", f"Could not write file: {e}")
 
-    def _fit_width(self):
-        canv_w = self.canvas.winfo_width()
-        if canv_w > 100:
-            self.zoom_level = (canv_w - 60) / (self.cfg.page_width * 2.5)
-            self._draw_page()
-
-    def _on_prev_page(self):
-        if self.current_page_idx > 0:
-            self.current_page_idx -= 1
-            self._draw_page()
-
-    def _on_next_page(self):
-        if self.current_page_idx < len(self.pages) - 1:
-            self.current_page_idx += 1
-            self._draw_page()
-
-    def _on_scan_ports(self):
-        ports = streamer.GrblStreamer.list_available_ports()
-        if ports:
-            self.port_var.set(ports[0])
-            messagebox.showinfo("Ports Detected", f"Found serial ports: {', '.join(ports)}")
+    def _on_reload_disk(self):
+        """Explicitly reloads assignment content from disk."""
+        if self._load_file_from_disk():
+            self.editor_txt.delete("1.0", tk.END)
+            self.editor_txt.insert("1.0", self.markdown_content)
+            self.update_pipeline()
+            messagebox.showinfo("Reloaded", f"Loaded latest contents of {os.path.basename(self.current_filepath)}")
         else:
-            messagebox.showinfo("No Hardware Found", "No USB serial plotters detected. Check cables or use Dry-Run mode.")
+            messagebox.showerror("Error", f"File not found on disk: {self.current_filepath}")
 
     def _on_browse_file(self):
+        """Opens file browser to select a different assignment file."""
         path = filedialog.askopenfilename(
             title="Select Markdown Document",
             filetypes=[("Markdown Files", "*.md"), ("Text Files", "*.txt"), ("All Files", "*.*")]
         )
         if path:
-            self.current_filepath = path
+            self.current_filepath = os.path.abspath(path)
             self.file_label.config(text=os.path.basename(path))
-            with open(path, "r", encoding="utf-8") as f:
-                self.markdown_content = f.read()
+            self._load_file_from_disk()
+            self.editor_txt.delete("1.0", tk.END)
+            self.editor_txt.insert("1.0", self.markdown_content)
             self.update_pipeline()
-
-    def _on_open_editor(self):
-        """Opens a live markdown editor popup window."""
-        win = tk.Toplevel(self.root)
-        win.title("Live Markdown Editor - CopyCat")
-        win.geometry("700x550")
-
-        txt = tk.Text(win, wrap=tk.WORD, font=("monospace", 11), padx=8, pady=8)
-        txt.pack(fill=tk.BOTH, expand=True)
-        txt.insert("1.0", self.markdown_content)
-
-        btn_row = ttk.Frame(win, padding=6)
-        btn_row.pack(fill=tk.X)
-
-        def apply_changes():
-            self.markdown_content = txt.get("1.0", tk.END)
-            self.update_pipeline()
-            win.destroy()
-
-        ttk.Button(btn_row, text="Apply & Re-render Canvas", command=apply_changes).pack(side=tk.RIGHT, padx=4)
-        ttk.Button(btn_row, text="Cancel", command=win.destroy).pack(side=tk.RIGHT)
 
     def update_pipeline(self):
-        """Synthesizes vector trajectories from Markdown and re-renders canvas."""
+        """Synthesizes single-stroke vector trajectories and updates page view."""
+        # Sync editor content if available
+        if hasattr(self, "editor_txt"):
+            txt_val = self.editor_txt.get("1.0", tk.END).strip()
+            if txt_val:
+                self.markdown_content = txt_val
+
         layout = layout_engine.LayoutEngine(
             cfg=self.cfg,
             style=self.style_var.get(),
@@ -337,16 +546,18 @@ class CopyCatStudio:
         try:
             self.pages = layout.parse_markdown(self.markdown_content)
         except Exception as e:
-            messagebox.showerror("Parsing Error", f"Failed to parse document: {e}")
+            messagebox.showerror("Parsing Error", f"Failed to layout document: {e}")
             return
 
         if self.current_page_idx >= len(self.pages):
             self.current_page_idx = max(0, len(self.pages) - 1)
 
+        # Reset animation index when document changes
+        self.sim_stroke_idx = 0
         self._draw_page()
 
     def _draw_page(self):
-        """Draws the realistic notebook paper, margins, and vector strokes on Tkinter canvas."""
+        """Draws realistic notebook paper, margins, and single-stroke trajectories."""
         self.canvas.delete("all")
         if not self.pages:
             return
@@ -358,143 +569,295 @@ class CopyCatStudio:
         self.page_indicator.config(text=f"Page {self.current_page_idx + 1} of {total_pages}")
         self.btn_prev.config(state=tk.NORMAL if self.current_page_idx > 0 else tk.DISABLED)
         self.btn_next.config(state=tk.NORMAL if self.current_page_idx < total_pages - 1 else tk.DISABLED)
-        self.stats_label.config(text=f"Strokes: {current_page.total_stroke_count}  |  Lines: {current_page.line_count}")
+        self.stats_label.config(text=f"Strokes: {current_page.total_stroke_count} | Lines: {current_page.line_count}")
 
         canv_w = self.canvas.winfo_width()
         canv_h = self.canvas.winfo_height()
         if canv_w < 50 or canv_h < 50:
             return
 
-        # Base scale: maps mm to pixels
         base_px_per_mm = 2.4 * self.zoom_level
         paper_w = self.cfg.page_width * base_px_per_mm
         paper_h = self.cfg.page_height * base_px_per_mm
 
-        # Center paper on canvas
-        paper_x = max(20.0, (canv_w - paper_w) / 2.0)
-        paper_y = 25.0
+        # Center paper on canvas + user pan offsets
+        center_x = (canv_w - paper_w) / 2.0 + self.pan_x
+        center_y = 25.0 + self.pan_y
 
-        # 1. Paper Drop Shadow
+        self._paper_origin_x = center_x
+        self._paper_origin_y = center_y
+        self._px_per_mm = base_px_per_mm
+
+        # 1. Drop shadow
         self.canvas.create_rectangle(
-            paper_x + 6, paper_y + 8, paper_x + paper_w + 6, paper_y + paper_h + 8,
-            fill="#101115", outline=""
+            center_x + 8, center_y + 10, center_x + paper_w + 8, center_y + paper_h + 10,
+            fill="#08090d", outline=""
         )
 
-        # 2. Paper Sheet (Ivory notebook)
+        # 2. Paper Sheet (Ivory notebook sheet)
         self.canvas.create_rectangle(
-            paper_x, paper_y, paper_x + paper_w, paper_y + paper_h,
-            fill="#FCFAF6", outline="#D0CECA"
+            center_x, center_y, center_x + paper_w, center_y + paper_h,
+            fill=PAPER_BG, outline="#2b2d3d", width=1
         )
 
-        # 3. Horizontal 8.0 mm Ruled Lines (Light blue)
+        # 3. Horizontal 8.0 mm Ruled Notebook Lines (Light blue)
         y_mm = self.cfg.margin_top
-        while y_mm <= self.cfg.margin_bottom:
-            py = paper_y + y_mm * base_px_per_mm
+        while y_mm <= self.cfg.margin_bottom + 5.0:
+            py = center_y + y_mm * base_px_per_mm
             self.canvas.create_line(
-                paper_x, py, paper_x + paper_w, py,
-                fill="#C3D7EE", width=1
+                center_x, py, center_x + paper_w, py,
+                fill=RULING_BLUE, width=1
             )
             y_mm += self.cfg.baseline_spacing
 
-        # 4. Top Margin Rule (Header accent)
-        top_py = paper_y + self.cfg.margin_top * base_px_per_mm
-        self.canvas.create_line(paper_x, top_py, paper_x + paper_w, top_py, fill="#A8C5E8", width=1)
-
-        # 5. Left Vertical Margin Line (Notebook Pink/Red)
-        margin_px = paper_x + self.cfg.margin_left * base_px_per_mm
+        # 4. Vertical Margin Line (Notebook red line at 20 mm)
+        margin_x = center_x + self.cfg.margin_left * base_px_per_mm
         self.canvas.create_line(
-            margin_px, paper_y, margin_px, paper_y + paper_h,
-            fill="#E15F5F", width=2
+            margin_x, center_y, margin_x, center_y + paper_h,
+            fill=MARGIN_RED, width=1
         )
 
-        # 6. Right & Bottom Cutoff Boundary Guides (Subtle dashed guides)
-        cutoff_right_px = paper_x + self.cfg.margin_right * base_px_per_mm
-        cutoff_bottom_py = paper_y + self.cfg.margin_bottom * base_px_per_mm
-        self.canvas.create_line(cutoff_right_px, top_py, cutoff_right_px, cutoff_bottom_py, fill="#E6C8C8", dash=(3, 3))
-        self.canvas.create_line(margin_px, cutoff_bottom_py, cutoff_right_px, cutoff_bottom_py, fill="#E6C8C8", dash=(3, 3))
+        # 5. Right Margin Boundary Guideline (Dotted line at 190 mm)
+        cutoff_x = center_x + self.cfg.margin_right * base_px_per_mm
+        self.canvas.create_line(
+            cutoff_x, center_y + self.cfg.margin_top * base_px_per_mm,
+            cutoff_x, center_y + self.cfg.margin_bottom * base_px_per_mm,
+            fill="#e2e8f0", dash=(2, 4)
+        )
 
-        # 7. Render Vector Trajectories in Dark Ink Blue
-        ink_color = "#14244B"
-        for stroke in current_page.strokes:
+        # 6. Render Single-Stroke Vector Trajectories
+        strokes_to_draw = current_page.strokes
+        if self.sim_animating:
+            strokes_to_draw = current_page.strokes[:self.sim_stroke_idx]
+
+        for stroke in strokes_to_draw:
             if len(stroke) < 2:
                 continue
-            coords: List[float] = []
-            for px, py in stroke:
-                coords.append(paper_x + px * base_px_per_mm)
-                coords.append(paper_y + py * base_px_per_mm)
-            self.canvas.create_line(coords, fill=ink_color, width=2, capstyle=tk.ROUND, joinstyle=tk.ROUND)
+            coords = []
+            for x_mm, y_mm in stroke:
+                coords.append(center_x + x_mm * base_px_per_mm)
+                coords.append(center_y + y_mm * base_px_per_mm)
 
+            self.canvas.create_line(
+                *coords,
+                fill=INK_NAVY,
+                width=max(1, int(1.2 * self.zoom_level)),
+                capstyle=tk.ROUND,
+                joinstyle=tk.ROUND
+            )
+
+        # If simulating, draw virtual pen tip cursor
+        if self.sim_animating and strokes_to_draw and len(strokes_to_draw[-1]) >= 1:
+            last_pt = strokes_to_draw[-1][-1]
+            tip_x = center_x + last_pt[0] * base_px_per_mm
+            tip_y = center_y + last_pt[1] * base_px_per_mm
+            self.canvas.create_oval(
+                tip_x - 3, tip_y - 3, tip_x + 3, tip_y + 3,
+                fill="#ff4757", outline="#ffffff", width=1
+            )
+
+    # --------------------------------------------------------------------------
+    # Interactive Viewport Navigation (Pan & Zoom)
+    # --------------------------------------------------------------------------
+    def _on_canvas_press(self, event):
+        self._drag_start_x = event.x
+        self._drag_start_y = event.y
+        self._is_dragging = True
+
+    def _on_canvas_drag(self, event):
+        if self._is_dragging:
+            dx = event.x - self._drag_start_x
+            dy = event.y - self._drag_start_y
+            self.pan_x += dx
+            self.pan_y += dy
+            self._drag_start_x = event.x
+            self._drag_start_y = event.y
+            self._draw_page()
+
+    def _on_canvas_release(self, event):
+        self._is_dragging = False
+
+    def _on_canvas_wheel(self, event):
+        if event.delta > 0:
+            self._adjust_zoom(1.15)
+        else:
+            self._adjust_zoom(0.85)
+
+    def _on_canvas_motion(self, event):
+        """Displays real-time millimeter coordinates on hover."""
+        if hasattr(self, "_paper_origin_x") and hasattr(self, "_px_per_mm") and self._px_per_mm > 0:
+            x_mm = (event.x - self._paper_origin_x) / self._px_per_mm
+            y_mm = (event.y - self._paper_origin_y) / self._px_per_mm
+            if 0.0 <= x_mm <= self.cfg.page_width and 0.0 <= y_mm <= self.cfg.page_height:
+                line_idx = max(0, int((y_mm - self.cfg.margin_top) / self.cfg.baseline_spacing) + 1)
+                self.hud_coords_var.set(f"X: {x_mm:5.1f} mm  |  Y: {y_mm:5.1f} mm  |  Ruled Line: {line_idx}  |  Zoom: {int(self.zoom_level * 100)}%")
+            else:
+                self.hud_coords_var.set(f"X: {x_mm:5.1f} mm  |  Y: {y_mm:5.1f} mm  (Off-sheet)")
+
+    def _adjust_zoom(self, factor: float):
+        self.zoom_level = max(0.3, min(4.0, self.zoom_level * factor))
+        self._draw_page()
+
+    def _fit_width(self):
+        canv_w = self.canvas.winfo_width()
+        if canv_w > 100:
+            self.zoom_level = (canv_w - 60) / (self.cfg.page_width * 2.4)
+            self.pan_x = 0.0
+            self._draw_page()
+
+    def _fit_page(self):
+        canv_w = self.canvas.winfo_width()
+        canv_h = self.canvas.winfo_height()
+        if canv_w > 100 and canv_h > 100:
+            scale_w = (canv_w - 60) / (self.cfg.page_width * 2.4)
+            scale_h = (canv_h - 60) / (self.cfg.page_height * 2.4)
+            self.zoom_level = min(scale_w, scale_h)
+            self.pan_x = 0.0
+            self.pan_y = 0.0
+            self._draw_page()
+
+    def _reset_view(self):
+        self.zoom_level = 1.0
+        self.pan_x = 0.0
+        self.pan_y = 0.0
+        self._draw_page()
+
+    def _on_prev_page(self):
+        if self.current_page_idx > 0:
+            self.current_page_idx -= 1
+            self.sim_stroke_idx = 0
+            self._draw_page()
+
+    def _on_next_page(self):
+        if self.current_page_idx < len(self.pages) - 1:
+            self.current_page_idx += 1
+            self.sim_stroke_idx = 0
+            self._draw_page()
+
+    # --------------------------------------------------------------------------
+    # Simulation / Drawing Animation Player
+    # --------------------------------------------------------------------------
+    def _toggle_simulation(self):
+        """Starts or pauses virtual plotting simulation."""
+        if self.sim_animating:
+            self.sim_animating = False
+            self.btn_sim.config(text="Simulate Plotting")
+        else:
+            if not self.pages:
+                return
+            self.sim_animating = True
+            self.sim_stroke_idx = 0
+            self.btn_sim.config(text="Pause Simulation")
+            self._simulation_step()
+
+    def _simulation_step(self):
+        if not self.sim_animating or not self.pages:
+            return
+
+        current_page = self.pages[self.current_page_idx]
+        total_strokes = len(current_page.strokes)
+
+        self.sim_stroke_idx += self.sim_speed
+        if self.sim_stroke_idx >= total_strokes:
+            self.sim_stroke_idx = total_strokes
+            self.sim_animating = False
+            self.btn_sim.config(text="Simulate Plotting")
+            self._draw_page()
+            return
+
+        self._draw_page()
+        self.root.after(30, self._simulation_step)
+
+    # --------------------------------------------------------------------------
+    # G-Code Export & Serial Streaming
+    # --------------------------------------------------------------------------
     def _on_export_gcode(self):
-        """Compiles and exports G-code files."""
-        out_dir = filedialog.askdirectory(title="Select Output Directory for G-Code")
+        if not self.pages:
+            messagebox.showwarning("Empty", "No pages to export.")
+            return
+
+        out_dir = filedialog.askdirectory(title="Select G-Code Output Directory", initialdir="./gcode_output")
         if not out_dir:
             return
+
+        os.makedirs(out_dir, exist_ok=True)
         compiler = gcode_compiler.GcodeCompiler(cfg=self.cfg)
-        results = compiler.compile_all(self.pages, output_dir=out_dir)
-        total_time = sum(r[1].estimated_time_seconds for r in results)
-        mins = int(total_time // 60)
-        secs = int(total_time % 60)
-        messagebox.showinfo(
-            "Export Complete",
-            f"Successfully compiled {len(results)} G-code file(s) into:\n{out_dir}\n"
-            f"Total estimated plot time: {mins}m {secs:02d}s"
-        )
+        saved = []
+        for p in self.pages:
+            text, stats = compiler.compile_page(p)
+            out_file = os.path.join(out_dir, f"page_{p.page_number}.gcode")
+            with open(out_file, "w", encoding="utf-8") as f:
+                f.write(text)
+            saved.append(f"{os.path.basename(out_file)} ({stats.total_gcode_lines} lines)")
+
+        messagebox.showinfo("Export Successful", f"Exported G-code files:\n" + "\n".join(saved))
 
     def _on_stream_plotter(self):
-        """Streams compiled G-code to the GRBL pen plotter."""
-        compiler = gcode_compiler.GcodeCompiler(cfg=self.cfg)
-        compiled_files = compiler.compile_all(self.pages, output_dir="./gcode_output")
-        gcode_paths = [f[0] for f in compiled_files]
+        if not self.pages:
+            messagebox.showwarning("Empty", "No pages to plot.")
+            return
+
+        port = self.port_var.get().strip()
+        dry_run = self.dry_run_var.get()
+        baud = self.baud_var.get()
+
+        if not dry_run and not port:
+            messagebox.showerror("Port Required", "Please specify a valid USB serial port (e.g. /dev/ttyUSB0 or COM3).")
+            return
 
         confirm = messagebox.askyesno(
-            "Confirm Plotting",
-            f"Ready to plot {len(gcode_paths)} page(s) to {self.port_var.get()}?\n"
-            f"Dry Run: {'YES' if self.dry_run_var.get() else 'NO (Physical Hardware)'}\n\n"
-            "Proceed?"
+            "Plotter Approval Check",
+            f"Ready to plot {len(self.pages)} page(s) on {port if not dry_run else 'SIMULATOR'}?\n\n"
+            f"Paper: ISO A4 (210 x 297 mm)\n"
+            f"Simulation: {'ENABLED (Dry-Run)' if dry_run else 'DISABLED (Physical Plotter)'}\n\n"
+            f"Proceed?"
         )
         if not confirm:
             return
 
-        # Launch progress window
-        prog_win = tk.Toplevel(self.root)
-        prog_win.title("Streaming to Pen Plotter")
-        prog_win.geometry("500x200")
+        # Compile temporary files
+        compiler = gcode_compiler.GcodeCompiler(cfg=self.cfg)
+        temp_files = []
+        for p in self.pages:
+            text, _ = compiler.compile_page(p)
+            tmp = f"/tmp/copycat_stream_p{p.page_number}.gcode"
+            with open(tmp, "w", encoding="utf-8") as f:
+                f.write(text)
+            temp_files.append(tmp)
 
-        lbl_status = ttk.Label(prog_win, text="Connecting to GRBL...", font=("sans-serif", 10, "bold"))
-        lbl_status.pack(pady=(20, 8))
+        def stream_worker():
+            st = streamer.GrblStreamer(port=port, baud_rate=baud, dry_run=dry_run, cfg=self.cfg)
+            if not st.connect():
+                self.root.after(0, lambda: messagebox.showerror("Connection Error", f"Could not connect to {port}"))
+                return
 
-        prog_bar = ttk.Progressbar(prog_win, mode="determinate", length=400)
-        prog_bar.pack(pady=10)
-
-        def run_streaming():
-            st = streamer.GrblStreamer(
-                port=self.port_var.get(),
-                baud_rate=self.baud_var.get(),
-                dry_run=self.dry_run_var.get(),
-                cfg=self.cfg
-            )
             try:
-                st.connect()
-                for idx, path in enumerate(gcode_paths, start=1):
-                    lbl_status.config(text=f"Plotting Page {idx} of {len(gcode_paths)}...")
-                    prog_bar["value"] = (idx - 1) / len(gcode_paths) * 100
-                    st.stream_file(path, page_number=idx, total_pages=len(gcode_paths))
-                prog_bar["value"] = 100
-                lbl_status.config(text="Done! All pages successfully plotted.")
-                messagebox.showinfo("Plot Complete", "All pages have been successfully plotted!")
-                prog_win.destroy()
-            except Exception as e:
-                messagebox.showerror("Streaming Error", f"Plotting failed: {e}")
-                prog_win.destroy()
+                for idx, fpath in enumerate(temp_files):
+                    st.stream_file(fpath, page_number=idx + 1, total_pages=len(temp_files))
+                self.root.after(0, lambda: messagebox.showinfo("Plot Complete", "All pages successfully plotted!"))
+            finally:
+                st.close()
+                for fpath in temp_files:
+                    if os.path.exists(fpath):
+                        os.remove(fpath)
 
-        threading.Thread(target=run_streaming, daemon=True).start()
+        threading.Thread(target=stream_worker, daemon=True).start()
+
+    def _on_scan_ports(self):
+        ports = streamer.GrblStreamer.list_available_ports()
+        if ports:
+            self.port_var.set(ports[0])
+            messagebox.showinfo("Ports Found", f"Available ports:\n{', '.join(ports)}")
+        else:
+            messagebox.showinfo("No Devices", "No serial devices detected. Check USB connection or use Dry-Run mode.")
 
 
 def launch_gui(filepath: str = "assignment.md"):
-    """Entry point to launch the Tkinter Studio."""
+    """Entry point for Tkinter GUI Studio."""
     if not TKINTER_AVAILABLE:
-        print("[ERROR] Tkinter is not available in this Python environment.")
+        print("[ERROR] Tkinter is not available in this Python installation.")
         sys.exit(1)
+
     root = tk.Tk()
     app = CopyCatStudio(root, initial_file=filepath)
     root.mainloop()
@@ -503,4 +866,3 @@ def launch_gui(filepath: str = "assignment.md"):
 if __name__ == "__main__":
     initial = sys.argv[1] if len(sys.argv) > 1 else "assignment.md"
     launch_gui(initial)
-
