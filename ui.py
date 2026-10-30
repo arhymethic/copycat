@@ -32,22 +32,125 @@ except ImportError:
     TKINTER_AVAILABLE = False
 
 
-# Theme color palette (Professional Deep Charcoal / Midnight Dark)
-DARK_BG = "#14151f"
-DARK_PANEL = "#1b1c28"
-DARK_PANEL_ALT = "#222434"
-DARK_BORDER = "#2c2e42"
-DARK_TEXT = "#e2e5f0"
-DARK_MUTED = "#868ba3"
-DARK_INPUT = "#101119"
-DARK_ACCENT = "#4f86f7"
-DARK_ACCENT_HOVER = "#6b9bf9"
-DARK_BTN = "#252738"
-DARK_BTN_HOVER = "#32354c"
-PAPER_BG = "#fbfaf6"
-RULING_BLUE = "#d8e5f2"
-MARGIN_RED = "#e57373"
-INK_NAVY = "#1a1f3c"
+# Theme color palettes
+THEMES: Dict[str, Dict[str, str]] = {
+    "dark": {
+        "name": "Dark Midnight",
+        "bg": "#14151f",
+        "panel": "#1b1c28",
+        "panel_alt": "#222434",
+        "border": "#2c2e42",
+        "text": "#e2e5f0",
+        "muted": "#868ba3",
+        "input": "#101119",
+        "accent": "#4f86f7",
+        "accent_hover": "#6b9bf9",
+        "btn": "#252738",
+        "btn_hover": "#32354c",
+        "canvas_bg": "#0d0e14",
+        "paper_bg": "#fbfaf6",
+        "paper_border": "#2b2d3d",
+        "ink": "#1a1f3c",
+        "ruling": "#d8e5f2",
+        "margin": "#e57373"
+    },
+    "oled": {
+        "name": "OLED Charcoal",
+        "bg": "#000000",
+        "panel": "#0c0d10",
+        "panel_alt": "#14161c",
+        "border": "#1c1e26",
+        "text": "#f0f2f8",
+        "muted": "#71768e",
+        "input": "#050608",
+        "accent": "#00d2ff",
+        "accent_hover": "#38deff",
+        "btn": "#181a22",
+        "btn_hover": "#252834",
+        "canvas_bg": "#000000",
+        "paper_bg": "#fcfbfa",
+        "paper_border": "#222430",
+        "ink": "#111425",
+        "ruling": "#dbe3ed",
+        "margin": "#ff5252"
+    },
+    "light": {
+        "name": "Light Studio",
+        "bg": "#f4f5f8",
+        "panel": "#ffffff",
+        "panel_alt": "#eef0f5",
+        "border": "#d2d6e0",
+        "text": "#1a1d28",
+        "muted": "#6b7280",
+        "input": "#ffffff",
+        "accent": "#2563eb",
+        "accent_hover": "#1d4ed8",
+        "btn": "#e5e7eb",
+        "btn_hover": "#d1d5db",
+        "canvas_bg": "#e5e7eb",
+        "paper_bg": "#ffffff",
+        "paper_border": "#cbd5e1",
+        "ink": "#1e293b",
+        "ruling": "#e2e8f0",
+        "margin": "#ef4444"
+    },
+    "sepia": {
+        "name": "Warm Sepia",
+        "bg": "#231f1d",
+        "panel": "#2d2825",
+        "panel_alt": "#38322e",
+        "border": "#4a423d",
+        "text": "#f3eee8",
+        "muted": "#a89e94",
+        "input": "#1d1a18",
+        "accent": "#d97706",
+        "accent_hover": "#f59e0b",
+        "btn": "#3d3632",
+        "btn_hover": "#4d4540",
+        "canvas_bg": "#181514",
+        "paper_bg": "#f7f1e5",
+        "paper_border": "#4d4540",
+        "ink": "#29211b",
+        "ruling": "#e3d8c5",
+        "margin": "#d96552"
+    },
+    "cyberpunk": {
+        "name": "Matrix Terminal",
+        "bg": "#0a0f0d",
+        "panel": "#101815",
+        "panel_alt": "#16221d",
+        "border": "#1e332a",
+        "text": "#e0f8ee",
+        "muted": "#5a8c76",
+        "input": "#070c0a",
+        "accent": "#00ff88",
+        "accent_hover": "#33ffa3",
+        "btn": "#182a22",
+        "btn_hover": "#223d31",
+        "canvas_bg": "#050807",
+        "paper_bg": "#f5f8f6",
+        "paper_border": "#1e332a",
+        "ink": "#0a1a12",
+        "ruling": "#d2e5dc",
+        "margin": "#ff4d6d"
+    }
+}
+
+
+class InAppLogStream:
+    """Mirrors console stdout stream to the in-app Tkinter log console safely."""
+    def __init__(self, original_stream, callback):
+        self.original_stream = original_stream
+        self.callback = callback
+
+    def write(self, s: str):
+        self.original_stream.write(s)
+        self.original_stream.flush()
+        if s:
+            self.callback(s)
+
+    def flush(self):
+        self.original_stream.flush()
 
 
 class CopyCatStudio:
@@ -58,7 +161,11 @@ class CopyCatStudio:
         self.root.title("CopyCat - Pen Plotter Studio")
         self.root.geometry("1300x880")
         self.root.minsize(1000, 720)
-        self.root.configure(bg=DARK_BG)
+
+        # Active theme state
+        self.active_theme_key = "dark"
+        self.theme = THEMES[self.active_theme_key]
+        self.root.configure(bg=self.theme["bg"])
 
         # Pipeline state
         self.cfg = config.PlotterConfig()
@@ -95,12 +202,20 @@ class CopyCatStudio:
         self.baud_var = tk.IntVar(value=self.cfg.baud_rate)
         self.dry_run_var = tk.BooleanVar(value=True)
 
-        # Coordinate HUD
+        # Coordinate HUD & Log ticker
         self.hud_coords_var = tk.StringVar(value="X: 0.0 mm | Y: 0.0 mm")
+        self.log_ticker_var = tk.StringVar(value="Ready")
 
         # Background threading state
         self._worker_thread: Optional[threading.Thread] = None
         self._update_pending: bool = False
+        self._synthesis_active: bool = False
+
+        # Hook stdout to in-app log viewer
+        self._orig_stdout = sys.stdout
+        self._log_stream = InAppLogStream(sys.stdout, self._append_log_message)
+        sys.stdout = self._log_stream
+        self.root.protocol("WM_DELETE_WINDOW", self._on_window_close)
 
         # Build application
         self._setup_styles()
@@ -111,66 +226,126 @@ class CopyCatStudio:
         # Start background disk watcher
         self._schedule_file_watch()
 
+    def _on_window_close(self):
+        """Restores stdout and safely exits."""
+        if hasattr(self, "_orig_stdout"):
+            sys.stdout = self._orig_stdout
+        self.root.destroy()
+
     def _setup_styles(self):
-        """Applies clean dark theme across all ttk widgets."""
+        """Initializes ttk theme engine and applies active theme."""
         self.style = ttk.Style(self.root)
         try:
             self.style.theme_use("clam")
         except tk.TclError:
             pass
+        self._apply_theme(self.active_theme_key)
 
-        self.style.configure(".", background=DARK_BG, foreground=DARK_TEXT, borderwidth=0)
-        self.style.configure("TFrame", background=DARK_BG)
-        self.style.configure("Panel.TFrame", background=DARK_PANEL)
-        self.style.configure("PanelAlt.TFrame", background=DARK_PANEL_ALT)
+    def _apply_theme(self, theme_key: str):
+        """Dynamically applies color palette across all ttk and tk widgets."""
+        if theme_key not in THEMES:
+            theme_key = "dark"
+        self.active_theme_key = theme_key
+        t = THEMES[theme_key]
+        self.theme = t
 
-        self.style.configure("TLabel", background=DARK_BG, foreground=DARK_TEXT, font=("sans-serif", 9))
-        self.style.configure("Panel.TLabel", background=DARK_PANEL, foreground=DARK_TEXT, font=("sans-serif", 9))
-        self.style.configure("Muted.TLabel", background=DARK_PANEL, foreground=DARK_MUTED, font=("sans-serif", 8))
-        self.style.configure("Header.TLabel", background=DARK_PANEL, foreground=DARK_TEXT, font=("sans-serif", 10, "bold"))
-        self.style.configure("Accent.TLabel", background=DARK_PANEL, foreground=DARK_ACCENT, font=("sans-serif", 9, "bold"))
+        # Update root and canvas
+        self.root.configure(bg=t["bg"])
+        if hasattr(self, "canvas"):
+            self.canvas.configure(bg=t["canvas_bg"])
+        if hasattr(self, "paned"):
+            self.paned.configure(bg=t["border"])
+        if hasattr(self, "editor_frame"):
+            self.editor_frame.configure(bg=t["border"])
+        if hasattr(self, "log_frame"):
+            self.log_frame.configure(bg=t["border"])
+
+        if hasattr(self, "editor_txt"):
+            self.editor_txt.configure(
+                bg=t["input"],
+                fg=t["text"],
+                insertbackground=t["accent"],
+                selectbackground=t["accent"],
+                selectforeground="#ffffff"
+            )
+
+        if hasattr(self, "log_txt"):
+            self.log_txt.configure(
+                bg=t["input"],
+                fg=t["text"],
+                insertbackground=t["accent"]
+            )
+            self._configure_log_tags()
+
+        # TTK styles
+        self.style.configure(".", background=t["bg"], foreground=t["text"], borderwidth=0)
+        self.style.configure("TFrame", background=t["bg"])
+        self.style.configure("Panel.TFrame", background=t["panel"])
+        self.style.configure("PanelAlt.TFrame", background=t["panel_alt"])
+
+        self.style.configure("TLabel", background=t["bg"], foreground=t["text"], font=("sans-serif", 9))
+        self.style.configure("Panel.TLabel", background=t["panel"], foreground=t["text"], font=("sans-serif", 9))
+        self.style.configure("Muted.TLabel", background=t["panel"], foreground=t["muted"], font=("sans-serif", 8))
+        self.style.configure("Header.TLabel", background=t["panel"], foreground=t["text"], font=("sans-serif", 10, "bold"))
+        self.style.configure("Accent.TLabel", background=t["panel"], foreground=t["accent"], font=("sans-serif", 9, "bold"))
+        self.style.configure("Logo.TLabel", background=t["panel"], foreground=t["accent"], font=("sans-serif", 13, "bold"))
 
         self.style.configure("TButton",
-                             background=DARK_BTN,
-                             foreground=DARK_TEXT,
+                             background=t["btn"],
+                             foreground=t["text"],
                              font=("sans-serif", 9),
                              padding=(8, 4),
                              borderwidth=1,
                              relief="flat")
         self.style.map("TButton",
-                       background=[("active", DARK_BTN_HOVER), ("disabled", DARK_BG)],
-                       foreground=[("disabled", DARK_MUTED)])
+                       background=[("active", t["btn_hover"]), ("disabled", t["bg"])],
+                       foreground=[("disabled", t["muted"])])
 
         self.style.configure("Primary.TButton",
-                             background=DARK_ACCENT,
+                             background=t["accent"],
                              foreground="#ffffff",
                              font=("sans-serif", 9, "bold"),
                              padding=(8, 5))
         self.style.map("Primary.TButton",
-                       background=[("active", DARK_ACCENT_HOVER)])
+                       background=[("active", t["accent_hover"])])
 
-        self.style.configure("TNotebook", background=DARK_PANEL, borderwidth=0)
+        self.style.configure("TNotebook", background=t["panel"], borderwidth=0)
         self.style.configure("TNotebook.Tab",
-                             background=DARK_PANEL_ALT,
-                             foreground=DARK_MUTED,
-                             padding=(12, 6),
+                             background=t["panel_alt"],
+                             foreground=t["muted"],
+                             padding=(10, 5),
                              font=("sans-serif", 9))
         self.style.map("TNotebook.Tab",
-                       background=[("selected", DARK_PANEL)],
-                       foreground=[("selected", DARK_TEXT)])
+                       background=[("selected", t["panel"])],
+                       foreground=[("selected", t["text"])])
 
         self.style.configure("TCombobox",
-                             fieldbackground=DARK_INPUT,
-                             background=DARK_BTN,
-                             foreground=DARK_TEXT,
-                             selectbackground=DARK_ACCENT,
+                             fieldbackground=t["input"],
+                             background=t["btn"],
+                             foreground=t["text"],
+                             selectbackground=t["accent"],
                              selectforeground="#ffffff",
                              font=("sans-serif", 9))
 
-        self.style.configure("TCheckbutton", background=DARK_PANEL, foreground=DARK_TEXT)
-        self.style.map("TCheckbutton", background=[("active", DARK_PANEL)])
+        self.style.configure("TEntry",
+                             fieldbackground=t["input"],
+                             foreground=t["text"])
 
-        self.style.configure("TScale", background=DARK_PANEL, troughcolor=DARK_INPUT)
+        self.style.configure("TCheckbutton", background=t["panel"], foreground=t["text"])
+        self.style.map("TCheckbutton", background=[("active", t["panel"])])
+
+        self.style.configure("TScale", background=t["panel"], troughcolor=t["input"])
+
+        self.style.configure("Horizontal.TProgressbar",
+                             background=t["accent"],
+                             troughcolor=t["input"],
+                             bordercolor=t["border"],
+                             lightcolor=t["accent"],
+                             darkcolor=t["accent"])
+
+        # Redraw canvas if pages exist
+        if hasattr(self, "pages") and self.pages:
+            self._draw_page()
 
     def _load_file_from_disk(self) -> bool:
         """Loads file content from disk and tracks modification timestamp."""
@@ -215,24 +390,39 @@ class CopyCatStudio:
             self.root.after(1000, self._schedule_file_watch)
 
     def _build_ui(self):
-        """Constructs split-pane interface with dark theme layout."""
-        paned = tk.PanedWindow(self.root, orient=tk.HORIZONTAL, bg=DARK_BORDER, bd=1, sashwidth=4)
+        """Constructs split-pane interface with responsive layout."""
+        paned = tk.PanedWindow(self.root, orient=tk.HORIZONTAL, bg=self.theme["border"], bd=1, sashwidth=4)
         paned.pack(fill=tk.BOTH, expand=True)
+        self.paned = paned
 
         # ----------------------------------------------------------------------
         # Left Panel (Sidebar with Notebook Tabs)
         # ----------------------------------------------------------------------
-        left_container = ttk.Frame(paned, style="Panel.TFrame", width=420)
-        paned.add(left_container, minsize=360)
+        left_container = ttk.Frame(paned, style="Panel.TFrame", width=430)
+        paned.add(left_container, minsize=370)
 
-        # Header bar
+        # Header bar with Brand and Theme Switcher
         header_bar = ttk.Frame(left_container, style="Panel.TFrame", padding=(12, 10))
         header_bar.pack(fill=tk.X)
 
-        title_lbl = ttk.Label(header_bar, text="COPYCAT", font=("sans-serif", 13, "bold"), foreground=DARK_ACCENT)
+        title_lbl = ttk.Label(header_bar, text="COPYCAT", style="Logo.TLabel")
         title_lbl.pack(side=tk.LEFT)
-        sub_lbl = ttk.Label(header_bar, text="  Plotter Studio", style="Muted.TLabel")
+        sub_lbl = ttk.Label(header_bar, text=" Studio", style="Muted.TLabel")
         sub_lbl.pack(side=tk.LEFT)
+
+        theme_box = ttk.Frame(header_bar, style="Panel.TFrame")
+        theme_box.pack(side=tk.RIGHT)
+        ttk.Label(theme_box, text="Theme:", style="Muted.TLabel").pack(side=tk.LEFT, padx=(0, 4))
+        self.theme_cb = ttk.Combobox(
+            theme_box,
+            values=[THEMES[k]["name"] for k in THEMES],
+            state="readonly",
+            width=13,
+            font=("sans-serif", 8)
+        )
+        self.theme_cb.set(self.theme["name"])
+        self.theme_cb.pack(side=tk.LEFT)
+        self.theme_cb.bind("<<ComboboxSelected>>", self._on_theme_changed)
 
         # Notebook tabs
         self.notebook = ttk.Notebook(left_container)
@@ -240,19 +430,25 @@ class CopyCatStudio:
 
         # Tab 1: Editor & Source
         tab_editor = ttk.Frame(self.notebook, style="Panel.TFrame", padding=10)
-        self.notebook.add(tab_editor, text="Markdown Source")
+        self.notebook.add(tab_editor, text="Source")
 
         # Tab 2: Style & Tuning
         tab_style = ttk.Frame(self.notebook, style="Panel.TFrame", padding=10)
-        self.notebook.add(tab_style, text="Handwriting Style")
+        self.notebook.add(tab_style, text="Style")
 
         # Tab 3: Hardware & Streamer
         tab_hardware = ttk.Frame(self.notebook, style="Panel.TFrame", padding=10)
-        self.notebook.add(tab_hardware, text="Machine & Serial")
+        self.notebook.add(tab_hardware, text="Machine")
+
+        # Tab 4: Generation Logs
+        tab_logs = ttk.Frame(self.notebook, style="Panel.TFrame", padding=10)
+        self.notebook.add(tab_logs, text="Logs")
+        self.tab_logs = tab_logs
 
         self._build_editor_tab(tab_editor)
         self._build_style_tab(tab_style)
         self._build_hardware_tab(tab_hardware)
+        self._build_logs_tab(tab_logs)
 
         # ----------------------------------------------------------------------
         # Right Panel (Interactive Canvas & Viewport)
@@ -277,7 +473,8 @@ class CopyCatStudio:
         btn_reload.pack(side=tk.RIGHT)
 
         # Editor text area
-        text_frame = tk.Frame(parent, bg=DARK_BORDER, bd=1)
+        text_frame = tk.Frame(parent, bg=self.theme["border"], bd=1)
+        self.editor_frame = text_frame
         text_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 8))
 
         self.editor_txt = tk.Text(
@@ -383,8 +580,139 @@ class CopyCatStudio:
         btn_stream = ttk.Button(parent, text="Stream to Plotter Hardware", style="Primary.TButton", command=self._on_stream_plotter)
         btn_stream.pack(fill=tk.X)
 
+    def _build_logs_tab(self, parent: ttk.Frame):
+        """Dedicated in-app generation logs console."""
+        top_row = ttk.Frame(parent, style="Panel.TFrame")
+        top_row.pack(fill=tk.X, pady=(0, 8))
+
+        lbl = ttk.Label(top_row, text="Pipeline Logs", style="Header.TLabel")
+        lbl.pack(side=tk.LEFT)
+
+        btn_copy = ttk.Button(top_row, text="Copy", width=7, command=self._on_copy_logs)
+        btn_copy.pack(side=tk.RIGHT, padx=(4, 0))
+
+        btn_clear = ttk.Button(top_row, text="Clear", width=7, command=self._on_clear_logs)
+        btn_clear.pack(side=tk.RIGHT)
+
+        self.auto_scroll_var = tk.BooleanVar(value=True)
+        chk_scroll = ttk.Checkbutton(top_row, text="Auto-scroll", variable=self.auto_scroll_var)
+        chk_scroll.pack(side=tk.RIGHT, padx=8)
+
+        log_frame = tk.Frame(parent, bg=self.theme["border"], bd=1)
+        log_frame.pack(fill=tk.BOTH, expand=True)
+        self.log_frame = log_frame
+
+        self.log_txt = tk.Text(
+            self.log_frame,
+            wrap=tk.WORD,
+            bg=self.theme["input"],
+            fg=self.theme["text"],
+            insertbackground=self.theme["accent"],
+            font=("monospace", 9),
+            padx=8,
+            pady=8,
+            bd=0,
+            state=tk.DISABLED
+        )
+        self.log_txt.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        scroll = ttk.Scrollbar(self.log_frame, orient=tk.VERTICAL, command=self.log_txt.yview)
+        scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self.log_txt.configure(yscrollcommand=scroll.set)
+
+        self._configure_log_tags()
+
+    def _on_theme_changed(self, event=None):
+        """Callback when user selects a different theme from the combobox."""
+        selected_name = self.theme_cb.get()
+        for key, t_data in THEMES.items():
+            if t_data["name"] == selected_name:
+                self._apply_theme(key)
+                print(f"[THEME] Switched theme to '{t_data['name']}'")
+                break
+
+    def _show_logs_tab(self):
+        """Switches the sidebar notebook to the Generation Logs tab."""
+        if hasattr(self, "notebook") and hasattr(self, "tab_logs"):
+            self.notebook.select(self.tab_logs)
+
+    def _on_clear_logs(self):
+        """Clears in-app log viewer."""
+        if hasattr(self, "log_txt"):
+            self.log_txt.configure(state=tk.NORMAL)
+            self.log_txt.delete("1.0", tk.END)
+            self.log_txt.configure(state=tk.DISABLED)
+
+    def _on_copy_logs(self):
+        """Copies all log contents to the system clipboard."""
+        if hasattr(self, "log_txt"):
+            content = self.log_txt.get("1.0", tk.END)
+            self.root.clipboard_clear()
+            self.root.clipboard_append(content)
+            messagebox.showinfo("Copied", "Log contents copied to clipboard.")
+
+    def _configure_log_tags(self):
+        """Applies high-visibility syntax colors to log tags according to the active theme."""
+        if not hasattr(self, "log_txt"):
+            return
+        is_light = (self.active_theme_key == "light")
+        self.log_txt.tag_config("default", foreground=self.theme["text"])
+        self.log_txt.tag_config("pipeline", foreground="#2563eb" if is_light else "#60a5fa", font=("monospace", 9, "bold"))
+        self.log_txt.tag_config("layout", foreground="#b45309" if is_light else "#fbbf24")
+        self.log_txt.tag_config("rnn", foreground="#7e22ce" if is_light else "#c084fc")
+        self.log_txt.tag_config("synth", foreground="#047857" if is_light else "#34d399")
+        self.log_txt.tag_config("cache", foreground="#4d7c0f" if is_light else "#a3e635")
+        self.log_txt.tag_config("style", foreground="#ea580c" if is_light else "#fb923c")
+        self.log_txt.tag_config("error", foreground="#dc2626" if is_light else "#f87171", font=("monospace", 9, "bold"))
+        self.log_txt.tag_config("streamer", foreground="#0284c7" if is_light else "#38bdf8")
+        self.log_txt.tag_config("disk", foreground="#475569" if is_light else "#94a3b8")
+
+    def _append_log_message(self, s: str):
+        """Thread-safe dispatch to append log text to in-app console."""
+        if hasattr(self, "root") and self.root.winfo_exists():
+            self.root.after_idle(lambda text=s: self._insert_log_text(text))
+
+    def _insert_log_text(self, text: str):
+        if not hasattr(self, "log_txt") or not self.log_txt.winfo_exists():
+            return
+
+        cleaned = text.strip()
+        if cleaned:
+            last_line = cleaned.splitlines()[-1].strip()
+            if len(last_line) > 55:
+                last_line = last_line[:52] + "..."
+            self.log_ticker_var.set(last_line)
+
+        self.log_txt.configure(state=tk.NORMAL)
+        for line in text.splitlines(keepends=True):
+            tag = "default"
+            if "[PIPELINE]" in line:
+                tag = "pipeline"
+            elif "[LAYOUT]" in line:
+                tag = "layout"
+            elif "[RNN]" in line:
+                tag = "rnn"
+            elif "[SYNTH]" in line:
+                tag = "synth"
+            elif "[CACHE]" in line:
+                tag = "cache"
+            elif "[STYLE]" in line:
+                tag = "style"
+            elif "[ERROR]" in line or "Exception" in line or "Traceback" in line:
+                tag = "error"
+            elif "[STREAMER]" in line or "[P1/" in line:
+                tag = "streamer"
+            elif "[DISK]" in line or "[FILE]" in line:
+                tag = "disk"
+
+            self.log_txt.insert(tk.END, line, tag)
+
+        if getattr(self, "auto_scroll_var", None) and self.auto_scroll_var.get():
+            self.log_txt.see(tk.END)
+        self.log_txt.configure(state=tk.DISABLED)
+
     def _build_canvas_view(self, parent: ttk.Frame):
-        """Constructs interactive viewport toolbar, canvas, and status HUD."""
+        """Constructs interactive viewport toolbar, task bar, canvas, and status HUD."""
         # Viewport Toolbar
         toolbar = ttk.Frame(parent, style="Panel.TFrame", padding=(10, 6))
         toolbar.pack(fill=tk.X)
@@ -415,8 +743,36 @@ class CopyCatStudio:
         self.stats_label = ttk.Label(toolbar, text="Strokes: 0", style="Muted.TLabel")
         self.stats_label.pack(side=tk.RIGHT, padx=6)
 
+        # ----------------------------------------------------------------------
+        # Generation Task Bar (Live synthesis progress, ETA, and logs shortcut)
+        # ----------------------------------------------------------------------
+        self.task_bar_frame = ttk.Frame(parent, style="PanelAlt.TFrame", padding=(10, 5))
+        self.task_bar_frame.pack(fill=tk.X)
+
+        self.task_status_lbl = ttk.Label(self.task_bar_frame, text="Ready", style="Panel.TLabel")
+        self.task_status_lbl.pack(side=tk.LEFT, padx=(0, 8))
+
+        self.progress_var = tk.DoubleVar(value=0.0)
+        self.progress_bar = ttk.Progressbar(
+            self.task_bar_frame,
+            variable=self.progress_var,
+            maximum=100.0,
+            mode="determinate",
+            length=180
+        )
+        self.progress_bar.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
+
+        self.task_pct_lbl = ttk.Label(self.task_bar_frame, text="0%", style="Accent.TLabel", width=5)
+        self.task_pct_lbl.pack(side=tk.LEFT, padx=(0, 6))
+
+        self.task_time_lbl = ttk.Label(self.task_bar_frame, text="", style="Muted.TLabel", width=8)
+        self.task_time_lbl.pack(side=tk.LEFT, padx=(0, 8))
+
+        btn_view_logs = ttk.Button(self.task_bar_frame, text="View Logs", command=self._show_logs_tab)
+        btn_view_logs.pack(side=tk.RIGHT)
+
         # Drawing Canvas
-        self.canvas = tk.Canvas(parent, bg="#0d0e14", highlightthickness=0, cursor="fleur")
+        self.canvas = tk.Canvas(parent, bg=self.theme["canvas_bg"], highlightthickness=0, cursor="fleur")
         self.canvas.pack(fill=tk.BOTH, expand=True)
 
         # Canvas Event Bindings
@@ -429,14 +785,19 @@ class CopyCatStudio:
         self.canvas.bind("<Button-4>", lambda e: self._adjust_zoom(1.15))
         self.canvas.bind("<Button-5>", lambda e: self._adjust_zoom(0.85))
 
-        # Bottom Status HUD
+        # Bottom Status HUD & Live Log Ticker
         status_hud = ttk.Frame(parent, style="Panel.TFrame", padding=(10, 4))
         status_hud.pack(fill=tk.X)
 
         self.hud_label = ttk.Label(status_hud, textvariable=self.hud_coords_var, style="Muted.TLabel")
         self.hud_label.pack(side=tk.LEFT)
 
-        guide_lbl = ttk.Label(status_hud, text="Drag to Pan | Scroll to Zoom | Click Simulate to preview pen travel", style="Muted.TLabel")
+        ttk.Separator(status_hud, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=10)
+
+        self.log_ticker = ttk.Label(status_hud, textvariable=self.log_ticker_var, style="Accent.TLabel")
+        self.log_ticker.pack(side=tk.LEFT)
+
+        guide_lbl = ttk.Label(status_hud, text="Drag to Pan | Scroll to Zoom | Click Simulate to preview", style="Muted.TLabel")
         guide_lbl.pack(side=tk.RIGHT)
 
     def _create_slider(self, parent: ttk.Frame, label_text: str, variable: tk.DoubleVar,
@@ -565,8 +926,28 @@ class CopyCatStudio:
     def _synthesis_worker(self):
         """Background thread worker for non-blocking stroke synthesis."""
         t_start = time.time()
+        self._synthesis_active = True
         filename = os.path.basename(self.current_filepath)
         print(f"\n[PIPELINE] Starting vector synthesis for '{filename}'...")
+
+        def _update_start():
+            if hasattr(self, "progress_var"):
+                self.progress_var.set(0.0)
+            if hasattr(self, "task_pct_lbl"):
+                self.task_pct_lbl.config(text="0%")
+            if hasattr(self, "task_status_lbl"):
+                self.task_status_lbl.config(text=f"Synthesizing '{filename}'...")
+            if hasattr(self, "task_time_lbl"):
+                self.task_time_lbl.config(text="0.0s")
+        self.root.after(0, _update_start)
+
+        def _timer_pulse():
+            if getattr(self, "_synthesis_active", False):
+                elapsed = time.time() - t_start
+                if hasattr(self, "task_time_lbl"):
+                    self.task_time_lbl.config(text=f"{elapsed:.1f}s")
+                self.root.after(100, _timer_pulse)
+        self.root.after(100, _timer_pulse)
 
         layout = layout_engine.LayoutEngine(
             cfg=self.cfg,
@@ -580,23 +961,32 @@ class CopyCatStudio:
 
         def progress_cb(current: int, total: int, text: str):
             disp = text[:24] + ("..." if len(text) > 24 else "")
+            pct = min(100.0, (current / max(1, total)) * 100.0)
             def _update_ui_progress():
+                if hasattr(self, "progress_var"):
+                    self.progress_var.set(pct)
+                if hasattr(self, "task_pct_lbl"):
+                    self.task_pct_lbl.config(text=f"{int(pct)}%")
+                if hasattr(self, "task_status_lbl"):
+                    self.task_status_lbl.config(text=f"Line {current}/{total}: \"{disp}\"")
                 self.hud_coords_var.set(f"Synthesizing ({current}/{total}): \"{disp}\"")
                 self.stats_label.config(text=f"Synthesizing ({current}/{total})")
             self.root.after(0, _update_ui_progress)
 
         try:
             pages = layout.parse_markdown(self.markdown_content, progress_callback=progress_cb)
+            self._synthesis_active = False
             elapsed = time.time() - t_start
             print(f"[PIPELINE] Synthesis finished in {elapsed:.2f}s ({len(pages)} page(s)).")
-            self.root.after(0, lambda: self._on_synthesis_success(pages))
+            self.root.after(0, lambda: self._on_synthesis_success(pages, elapsed))
         except Exception as e:
+            self._synthesis_active = False
             print(f"[ERROR] Synthesis failed: {e}", file=sys.stderr)
             import traceback
             traceback.print_exc()
             self.root.after(0, lambda: self._on_synthesis_error(str(e)))
 
-    def _on_synthesis_success(self, pages: List[layout_engine.Page]):
+    def _on_synthesis_success(self, pages: List[layout_engine.Page], elapsed: float = 0.0):
         """Main thread callback to refresh view with newly generated pages."""
         self.pages = pages
         if self.current_page_idx >= len(self.pages):
@@ -604,6 +994,17 @@ class CopyCatStudio:
 
         self.sim_stroke_idx = 0
         self._draw_page()
+
+        total_strokes = sum(len(p.strokes) for p in pages)
+        if hasattr(self, "progress_var"):
+            self.progress_var.set(100.0)
+        if hasattr(self, "task_pct_lbl"):
+            self.task_pct_lbl.config(text="100%")
+        if hasattr(self, "task_status_lbl"):
+            self.task_status_lbl.config(text=f"Ready - Generated {len(pages)} page(s) ({total_strokes} strokes)")
+        if hasattr(self, "task_time_lbl"):
+            self.task_time_lbl.config(text=f"{elapsed:.1f}s")
+
         self.hud_coords_var.set("Ready | Drag to Pan | Scroll to Zoom")
         print(f"[GUI] Canvas updated: Displaying Page {self.current_page_idx + 1} of {len(self.pages)}")
 
@@ -615,6 +1016,12 @@ class CopyCatStudio:
 
     def _on_synthesis_error(self, err_msg: str):
         """Main thread callback when layout parsing fails."""
+        if hasattr(self, "progress_var"):
+            self.progress_var.set(0.0)
+        if hasattr(self, "task_pct_lbl"):
+            self.task_pct_lbl.config(text="Error")
+        if hasattr(self, "task_status_lbl"):
+            self.task_status_lbl.config(text=f"Failed: {err_msg[:30]}")
         self.stats_label.config(text="Error")
         self.hud_coords_var.set("Error during synthesis")
         messagebox.showerror("Parsing Error", f"Failed to layout document:\n{err_msg}")
@@ -627,6 +1034,7 @@ class CopyCatStudio:
 
         current_page = self.pages[self.current_page_idx]
         total_pages = len(self.pages)
+        t = self.theme
 
         # Update indicators
         self.page_indicator.config(text=f"Page {self.current_page_idx + 1} of {total_pages}")
@@ -652,40 +1060,42 @@ class CopyCatStudio:
         self._px_per_mm = base_px_per_mm
 
         # 1. Drop shadow
+        shadow_fill = "#000000" if self.active_theme_key != "light" else "#cbd5e1"
         self.canvas.create_rectangle(
             center_x + 8, center_y + 10, center_x + paper_w + 8, center_y + paper_h + 10,
-            fill="#08090d", outline=""
+            fill=shadow_fill, outline=""
         )
 
-        # 2. Paper Sheet (Ivory notebook sheet)
+        # 2. Paper Sheet (Notebook sheet)
         self.canvas.create_rectangle(
             center_x, center_y, center_x + paper_w, center_y + paper_h,
-            fill=PAPER_BG, outline="#2b2d3d", width=1
+            fill=t["paper_bg"], outline=t["paper_border"], width=1
         )
 
-        # 3. Horizontal 8.0 mm Ruled Notebook Lines (Light blue)
+        # 3. Horizontal 8.0 mm Ruled Notebook Lines
         y_mm = self.cfg.margin_top
         while y_mm <= self.cfg.margin_bottom + 5.0:
             py = center_y + y_mm * base_px_per_mm
             self.canvas.create_line(
                 center_x, py, center_x + paper_w, py,
-                fill=RULING_BLUE, width=1
+                fill=t["ruling"], width=1
             )
             y_mm += self.cfg.baseline_spacing
 
-        # 4. Vertical Margin Line (Notebook red line at 20 mm)
+        # 4. Vertical Margin Line
         margin_x = center_x + self.cfg.margin_left * base_px_per_mm
         self.canvas.create_line(
             margin_x, center_y, margin_x, center_y + paper_h,
-            fill=MARGIN_RED, width=1
+            fill=t["margin"], width=1
         )
 
         # 5. Right Margin Boundary Guideline (Dotted line at 190 mm)
         cutoff_x = center_x + self.cfg.margin_right * base_px_per_mm
+        guide_col = "#334155" if self.active_theme_key != "light" else "#94a3b8"
         self.canvas.create_line(
             cutoff_x, center_y + self.cfg.margin_top * base_px_per_mm,
             cutoff_x, center_y + self.cfg.margin_bottom * base_px_per_mm,
-            fill="#e2e8f0", dash=(2, 4)
+            fill=guide_col, dash=(2, 4)
         )
 
         # 6. Render Single-Stroke Vector Trajectories
@@ -703,7 +1113,7 @@ class CopyCatStudio:
 
             self.canvas.create_line(
                 *coords,
-                fill=INK_NAVY,
+                fill=t["ink"],
                 width=max(1, int(1.2 * self.zoom_level)),
                 capstyle=tk.ROUND,
                 joinstyle=tk.ROUND

@@ -313,17 +313,25 @@ MICRO_WOBBLE = 0.04         # Anti-robotic hand tremor (mm)
 
 ## Interactive Studio GUI
 
-In addition to the visual inspection canvas, CopyCat includes a full desktop Dark Mode Studio (`ui.py`):
+In addition to the visual inspection canvas, CopyCat includes a full desktop Pen Plotter Studio (`ui.py`):
 
 ```bash
-# Launch Dark Mode Studio
+# Launch Desktop Studio
 python3 main.py --gui
 # Or directly:
 python3 ui.py assignment.md
 ```
 
 ### Features of the Studio:
-- **Interactive Ruled Sheet Canvas**: Auto-renders your handwriting on simulated notebook paper with margins. Full click-and-drag pan, mousewheel zoom, and hover coordinate HUD.
+- **Generation Task Bar**: Live progress bar showing percentage completion, current synthesizing line preview, and active elapsed timer.
+- **In-App Generation Logs**: Dedicated "Logs" tab with real-time terminal output, colored syntax tags (`[PIPELINE]`, `[LAYOUT]`, `[RNN]`, `[SYNTH]`, `[CACHE]`), auto-scroll, and clipboard copy.
+- **In-App Theme Switcher**: Choose from 5 themes directly inside the app header:
+  - **Dark Midnight** (Default professional charcoal & blue)
+  - **OLED Charcoal** (High-contrast pure black)
+  - **Light Studio** (Crisp clean white & slate)
+  - **Warm Sepia** (Parchment notebook & warm amber)
+  - **Matrix Terminal** (Cyberpunk high-tech green)
+- **Interactive Ruled Sheet Canvas**: Auto-renders your handwriting on notebook paper with margins. Full click-and-drag pan, mousewheel zoom, and hover coordinate HUD.
 - **Embedded Markdown Editor**: Live multiline text area with disk sync and auto-reloading when `assignment.md` is edited externally.
 - **Plotting Simulation**: Real-time virtual pen animation showing motion trajectories stroke by stroke.
 - **Instant Style Selection**: Switch between all 24 handwriting styles with current fine-tuning slider values preserved.
