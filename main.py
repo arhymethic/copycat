@@ -15,6 +15,8 @@ import os
 import sys
 import time
 
+os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
+
 import config
 from layout_engine import LayoutEngine
 from visualizer import Visualizer

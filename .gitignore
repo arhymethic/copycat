@@ -13,6 +13,9 @@ ENV/
 gcode_output/
 preview_images/
 *.gcode
+data/cache/
+*.db
+*.so
 
 # Neural network checkpoints
 checkpoints/

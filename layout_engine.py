@@ -335,6 +335,10 @@ class LayoutEngine:
                 x_start = start_x if not lines_to_render else continuation_x
                 lines_to_render.append((" ".join(line_words), x_start))
 
+            # Concurrently prefetch any uncached lines across CPU cores
+            all_texts = [txt for txt, _ in lines_to_render]
+            rnn_engine.VASQUEZ_ENGINE.prefetch_lines(all_texts, style_id=style_id, bias=bias)
+
             for line_text, x_pos in lines_to_render:
                 if baseline_y > self.cfg.margin_bottom:
                     current_page = Page(page_number=len(pages) + 1)

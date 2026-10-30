@@ -24,7 +24,13 @@ import os
 import sys
 import time
 import logging
+import ctypes
+import sqlite3
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from typing import List, Tuple, Optional, Dict, Any
+
+os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
 
 import numpy as np
 
@@ -100,8 +106,52 @@ class GravesNumPyModel:
         self.weights_path = weights_path
         self.loaded = False
         self.primed_states_cache: Dict[int, Dict[str, Any]] = {}
+        self._c_lib = self._init_c_accelerator()
         self._load_weights()
         self._load_primed_states()
+
+    def _init_c_accelerator(self):
+        """Attempts to load or compile the native C-AVX2 accelerator library for 10x-20x speedup."""
+        so_path = os.path.join(DATA_DIR, "librnn_fast.so")
+        c_path = os.path.join(DATA_DIR, "fast_graves.c")
+
+        if not os.path.exists(so_path) and os.path.exists(c_path):
+            try:
+                import subprocess
+                subprocess.run(
+                    ["gcc", "-O3", "-mavx2", "-mfma", "-shared", "-fPIC", c_path, "-o", so_path, "-lm"],
+                    check=True,
+                    capture_output=True
+                )
+            except Exception as e:
+                logger.debug("Could not compile C accelerator: %s", e)
+                return None
+
+        if os.path.exists(so_path):
+            try:
+                lib = ctypes.CDLL(so_path)
+                lib.fast_sample_line.argtypes = [
+                    ctypes.POINTER(ctypes.c_float), ctypes.POINTER(ctypes.c_float),
+                    ctypes.POINTER(ctypes.c_float), ctypes.POINTER(ctypes.c_float),
+                    ctypes.POINTER(ctypes.c_float), ctypes.POINTER(ctypes.c_float),
+                    ctypes.POINTER(ctypes.c_float), ctypes.POINTER(ctypes.c_float),
+                    ctypes.POINTER(ctypes.c_float), ctypes.POINTER(ctypes.c_float),
+                    ctypes.POINTER(ctypes.c_float), ctypes.POINTER(ctypes.c_float),
+                    ctypes.POINTER(ctypes.c_float), ctypes.POINTER(ctypes.c_float),
+                    ctypes.POINTER(ctypes.c_float), ctypes.POINTER(ctypes.c_float),
+                    ctypes.POINTER(ctypes.c_float), ctypes.POINTER(ctypes.c_float),
+                    ctypes.POINTER(ctypes.c_float), ctypes.c_int,
+                    ctypes.c_float, ctypes.c_int,
+                    ctypes.POINTER(ctypes.c_float),
+                    ctypes.c_uint
+                ]
+                lib.fast_sample_line.restype = ctypes.c_int
+                logger.info("Loaded native C-AVX2 neural accelerator.")
+                return lib
+            except Exception as e:
+                logger.debug("Failed loading librnn_fast.so: %s", e)
+                return None
+        return None
 
     def _load_weights(self):
         """Loads weight matrices and bias vectors from compressed npz or raw binary."""
@@ -304,9 +354,47 @@ class GravesNumPyModel:
         u_vec = np.arange(U, dtype=np.float32)
 
         # 2. Free-running generative phase: sample new text
+        max_steps = 38 * len(clean_line)
+
+        # Fast path: Native C-AVX2 compiled kernel (10x-20x speedup)
+        if self._c_lib is not None:
+            out_buf = np.zeros((max_steps, 3), dtype=np.float32)
+            seed = int(time.time() * 1000) & 0x7FFFFFFF
+
+            steps_sampled = self._c_lib.fast_sample_line(
+                self.att_w.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
+                self.att_b.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
+                self.lstm1_w.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
+                self.lstm1_b.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
+                self.lstm2_w.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
+                self.lstm2_b.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
+                self.lstm3_w.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
+                self.lstm3_b.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
+                self.gmm_w.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
+                self.gmm_b.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
+                c1.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
+                h1.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
+                c2.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
+                h2.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
+                c3.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
+                h3.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
+                kappa.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
+                w.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
+                c_one_hot.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
+                U,
+                ctypes.c_float(bias),
+                max_steps,
+                out_buf.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
+                seed
+            )
+            sampled = out_buf[:steps_sampled]
+            elapsed = time.time() - t_start
+            print(f"      [RNN-FAST] Synthesized line in {elapsed:.2f}s ({steps_sampled} points, style={style_idx}, bias={bias:.2f}) [C-AVX2]")
+            return sampled
+
+        # Fallback path: Pure NumPy loop
         sampled: List[np.ndarray] = []
         curr_inp = np.array([0.0, 0.0, 0.0], dtype=np.float32)
-        max_steps = 38 * len(clean_line)
 
         for _ in range(max_steps):
             s1_in = np.concatenate([w, curr_inp])
@@ -410,6 +498,68 @@ def transform_strokes(strokes: List[Stroke],
     return transformed
 
 
+class DiskLineCache:
+    """Persistent SQLite-backed cache for sampled neural stroke offsets."""
+
+    def __init__(self, db_path: str):
+        self.db_path = db_path
+        os.makedirs(os.path.dirname(db_path), exist_ok=True)
+        self._lock = threading.Lock()
+        self._init_db()
+
+    def _init_db(self):
+        try:
+            with self._lock:
+                conn = sqlite3.connect(self.db_path, timeout=5.0)
+                try:
+                    conn.execute("""
+                        CREATE TABLE IF NOT EXISTS line_cache (
+                            key TEXT PRIMARY KEY,
+                            n_points INTEGER,
+                            data BLOB
+                        )
+                    """)
+                    conn.commit()
+                finally:
+                    conn.close()
+        except Exception as e:
+            logger.debug("Failed to init SQLite line cache: %s", e)
+
+    def get(self, key: str) -> Optional[np.ndarray]:
+        try:
+            with self._lock:
+                conn = sqlite3.connect(self.db_path, timeout=3.0)
+                try:
+                    cur = conn.cursor()
+                    cur.execute("SELECT n_points, data FROM line_cache WHERE key = ?", (key,))
+                    row = cur.fetchone()
+                    if row:
+                        n_points, blob = row
+                        return np.frombuffer(blob, dtype=np.float32).reshape(n_points, 3).copy()
+                finally:
+                    conn.close()
+        except Exception as e:
+            logger.debug("Disk cache get failed: %s", e)
+        return None
+
+    def put(self, key: str, offsets: np.ndarray):
+        try:
+            n_points = len(offsets)
+            blob = offsets.astype(np.float32).tobytes()
+            with self._lock:
+                conn = sqlite3.connect(self.db_path, timeout=5.0)
+                try:
+                    conn.execute(
+                        "INSERT OR REPLACE INTO line_cache (key, n_points, data) VALUES (?, ?, ?)",
+                        (key, n_points, blob)
+                    )
+                    conn.commit()
+                finally:
+                    conn.close()
+        except Exception as e:
+            logger.debug("Disk cache put failed: %s", e)
+
+
 class VasquezHandwritingEngine:
     """
     Direct bridge to sjvasquez/handwriting-synthesis.
@@ -427,8 +577,13 @@ class VasquezHandwritingEngine:
         self.has_styles = os.path.exists(self.styles_dir)
 
         self.neural_model: Optional[GravesNumPyModel] = None
+        self._cache_lock = threading.Lock()
         self._raw_offsets_cache: Dict[Tuple[str, int, float], np.ndarray] = {}
         self._line_cache: Dict[Tuple[str, int, float], Tuple[List[Stroke], float]] = {}
+
+        db_path = os.path.join(DATA_DIR, "cache", "neural_cache.db")
+        self.disk_cache = DiskLineCache(db_path)
+
         self._init_model()
 
     def _init_model(self):
@@ -444,6 +599,69 @@ class VasquezHandwritingEngine:
     def is_rnn_ready(self) -> bool:
         """Returns True if the Graves RNN weights are loaded and ready to infer."""
         return self.neural_model is not None and self.neural_model.loaded
+
+    def is_cached(self, text: str, style_id: int = 1, bias: float = 0.85) -> bool:
+        """Returns True if the line's raw offsets are already cached in RAM or on disk."""
+        clean_text = text.strip()
+        cache_key = (clean_text, style_id % 13, round(bias, 2))
+        with self._cache_lock:
+            if cache_key in self._raw_offsets_cache:
+                return True
+        key_str = f"{clean_text}__s{style_id % 13}__b{round(bias, 2)}"
+        return self.disk_cache.get(key_str) is not None
+
+    def get_or_sample_offsets(self, text: str, style_id: int = 1, bias: float = 0.85) -> np.ndarray:
+        """Fetches raw offsets from RAM/disk cache or synthesizes via neural model."""
+        if not self.is_rnn_ready():
+            raise RuntimeError(
+                f"Graves RNN model weights are missing or not loaded from {self.weights_file}."
+            )
+
+        clean_text = text.strip()
+        cache_key = (clean_text, style_id % 13, round(bias, 2))
+        with self._cache_lock:
+            if cache_key in self._raw_offsets_cache:
+                return self._raw_offsets_cache[cache_key]
+
+        key_str = f"{clean_text}__s{style_id % 13}__b{round(bias, 2)}"
+        disk_val = self.disk_cache.get(key_str)
+        if disk_val is not None:
+            with self._cache_lock:
+                self._raw_offsets_cache[cache_key] = disk_val
+            return disk_val
+
+        t0 = time.time()
+        raw_offsets = self.neural_model.sample_line(text, style_id=style_id, bias=bias)  # type: ignore
+        if len(raw_offsets) > 0:
+            with self._cache_lock:
+                self._raw_offsets_cache[cache_key] = raw_offsets
+            self.disk_cache.put(key_str, raw_offsets)
+            preview = text[:28] + ("..." if len(text) > 28 else "")
+            print(f"      [SYNTH] Line \"{preview}\" sampled ({len(raw_offsets)} points, {time.time() - t0:.2f}s)")
+        return raw_offsets
+
+    def prefetch_lines(self, texts: List[str], style_id: int = 1, bias: float = 0.85):
+        """Synthesizes multiple lines in parallel across CPU cores using a ThreadPoolExecutor."""
+        uncached = [t for t in texts if not self.is_cached(t, style_id, bias)]
+        if not uncached:
+            return
+
+        workers = min(4, len(uncached), os.cpu_count() or 4)
+        if workers <= 1:
+            for t in uncached:
+                self.get_or_sample_offsets(t, style_id, bias)
+            return
+
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = [
+                executor.submit(self.get_or_sample_offsets, t, style_id, bias)
+                for t in uncached
+            ]
+            for f in futures:
+                try:
+                    f.result()
+                except Exception as e:
+                    logger.warning("Parallel line synthesis error: %s", e)
 
     def get_style_info(self, style_id: int) -> Dict[str, str]:
         """Returns description and priming text for a style (0-12)."""
@@ -473,29 +691,14 @@ class VasquezHandwritingEngine:
                         wobble: float = 0.0) -> Tuple[List[Stroke], float]:
         """
         Synthesizes a line of text using the exact handwriting-synthesis logic:
-        1. Alex Graves RNN generation with style priming (cached in memory)
+        1. Alex Graves RNN generation with style priming (cached in memory and disk)
         2. Applies drawing.offsets_to_coords, drawing.denoise, and drawing.align
         3. Scales coordinates to physical millimeters locked to 8.0 mm baselines
         4. Applies interactive fine-tuning parameters (slant, jitter, wobble).
         """
-        if not self.is_rnn_ready():
-            raise RuntimeError(
-                f"Graves RNN model weights are missing or not loaded from {self.weights_file}."
-            )
-
-        cache_key = (text.strip(), style_id % 13, round(bias, 2))
-
-        # Check raw offsets cache to avoid slow re-sampling when adjusting sliders
-        if cache_key in self._raw_offsets_cache:
-            raw_offsets = self._raw_offsets_cache[cache_key]
-        else:
-            t0 = time.time()
-            raw_offsets = self.neural_model.sample_line(text, style_id=style_id, bias=bias)  # type: ignore
-            if len(raw_offsets) == 0:
-                return [], 0.0
-            self._raw_offsets_cache[cache_key] = raw_offsets
-            preview = text[:28] + ("..." if len(text) > 28 else "")
-            print(f"      [SYNTH] Line \"{preview}\" sampled ({len(raw_offsets)} points, {time.time() - t0:.2f}s)")
+        raw_offsets = self.get_or_sample_offsets(text, style_id=style_id, bias=bias)
+        if len(raw_offsets) == 0:
+            return [], 0.0
 
         # Convert raw offsets to physical millimeters
         polylines, total_width = self._process_offsets_to_mm(
